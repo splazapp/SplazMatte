@@ -1,0 +1,43 @@
+# Core ML framework
+# Mac (MPS): install via `pip install torch torchvision torchaudio`
+# CUDA 12.4: install via `pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124`
+# Versions are installed separately in setup.sh due to platform-specific index URLs.
+# torch>=2.4.0
+# torchvision>=0.19.0
+# torchaudio>=2.4.0
+
+# HuggingFace ecosystem
+huggingface_hub>=0.25.0
+transformers>=4.49.0
+diffusers>=0.31.0
+accelerate>=1.9.0
+safetensors>=0.3.0
+tokenizers>=0.20.3
+
+# Computer vision & image processing
+numpy>=1.26,<2
+opencv-python>=4.9.0.80
+Pillow>=9.5
+scipy>=1.7
+imageio>=2.31.0
+imageio-ffmpeg>=0.4.9
+
+# Model utilities
+timm>=1.0.17
+einops>=0.6
+omegaconf>=2.3
+hydra-core>=1.3
+iopath>=0.1.10
+
+# UI (Gradio)
+gradio>=4.0
+
+# R2 upload
+boto3>=1.34.0
+
+# HTTP (Feishu webhook)
+requests>=2.31.0
+
+# Utilities
+tqdm>=4.65
+python-dotenv>=1.0.0

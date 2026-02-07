@@ -1,0 +1,371 @@
+"""Gradio callback functions for SplazMatte app."""
+
+import logging
+import shutil
+import time
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+
+import gradio as gr
+import imageio
+import numpy as np
+
+from config import DEFAULT_WARMUP, PROCESSING_LOG_FILE, WORKSPACE_DIR
+from pipeline.video_io import (
+    encode_video,
+    extract_frames,
+    load_all_frames_as_tensor,
+    load_frame,
+)
+from utils.mask_utils import draw_frame_number, draw_points, overlay_mask
+from utils.notify import notify_failure, upload_and_notify
+
+log = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Lazy-loaded global engines (initialized on first use)
+# ---------------------------------------------------------------------------
+_sam2_engine = None
+_sam2_video_engine = None
+_matanyone_engine = None
+
+
+def _get_sam2():
+    global _sam2_engine
+    if _sam2_engine is None:
+        from engines.sam2_engine import SAM2Engine
+        _sam2_engine = SAM2Engine()
+    return _sam2_engine
+
+
+def _get_sam2_video():
+    global _sam2_video_engine
+    if _sam2_video_engine is None:
+        from engines.sam2_video_engine import SAM2VideoEngine
+        _sam2_video_engine = SAM2VideoEngine()
+    return _sam2_video_engine
+
+
+def _get_matanyone():
+    global _matanyone_engine
+    if _matanyone_engine is None:
+        from engines.matanyone_engine import MatAnyoneEngine
+        _matanyone_engine = MatAnyoneEngine()
+    return _matanyone_engine
+
+
+# ---------------------------------------------------------------------------
+# State helpers
+# ---------------------------------------------------------------------------
+def empty_state() -> dict:
+    """Create a fresh session state dict."""
+    return {
+        "session_id": "",
+        "frames_dir": None,
+        "num_frames": 0,
+        "fps": 0.0,
+        "current_frame_idx": 0,
+        "click_points": [],
+        "click_labels": [],
+        "current_mask": None,
+        "keyframes": {},
+        "propagated_masks": {},
+        "_sam2_image_idx": -1,
+        "source_video_path": None,
+        "video_file_size": 0,
+        "video_format": "",
+        "video_duration": 0.0,
+        "video_width": 0,
+        "video_height": 0,
+    }
+
+
+def render_frame(state: dict) -> np.ndarray:
+    """Render the current frame with mask overlay and click points."""
+    frame = load_frame(state["frames_dir"], state["current_frame_idx"])
+    if state["current_mask"] is not None:
+        frame = overlay_mask(frame, state["current_mask"])
+    if state["click_points"]:
+        frame = draw_points(frame, state["click_points"], state["click_labels"])
+    return frame
+
+
+def keyframe_display(state: dict) -> str:
+    """Build a markdown string showing saved keyframes."""
+    if not state["keyframes"]:
+        return "尚未保存任何关键帧。"
+    indices = sorted(state["keyframes"].keys())
+    parts = [f"**#{i}**" for i in indices]
+    return "关键帧: " + "  ".join(parts)
+
+
+def keyframe_gallery(state: dict) -> list[tuple[np.ndarray, str]]:
+    """Build gallery items: list of (overlay_image, caption) for each keyframe."""
+    if not state["keyframes"] or state["frames_dir"] is None:
+        return []
+    items = []
+    for idx in sorted(state["keyframes"].keys()):
+        frame = load_frame(state["frames_dir"], idx)
+        preview = overlay_mask(frame, state["keyframes"][idx])
+        items.append((preview, f"第 {idx} 帧"))
+    return items
+
+
+# ---------------------------------------------------------------------------
+# Callbacks
+# ---------------------------------------------------------------------------
+def on_upload(video_path: str, state: dict):
+    """Extract frames from uploaded video and initialize session state."""
+    if video_path is None:
+        return (state, None, gr.update(), gr.update(),
+                keyframe_display(state), keyframe_gallery(state))
+
+    session_id = str(uuid.uuid4())[:8]
+    frames_dir = WORKSPACE_DIR / "sessions" / session_id / "frames"
+
+    num_frames, fps = extract_frames(Path(video_path), frames_dir)
+
+    state = empty_state()
+    state["session_id"] = session_id
+    state["frames_dir"] = frames_dir
+    state["num_frames"] = num_frames
+    state["fps"] = fps
+
+    # Copy source video into session dir (Gradio temp files may be cleaned)
+    session_dir = WORKSPACE_DIR / "sessions" / session_id
+    source_path = Path(video_path)
+    dest_path = session_dir / f"source{source_path.suffix}"
+    shutil.copy2(source_path, dest_path)
+    state["source_video_path"] = dest_path
+    state["video_file_size"] = dest_path.stat().st_size
+    state["video_format"] = source_path.suffix.lstrip(".")
+    state["video_duration"] = num_frames / fps if fps else 0.0
+
+    # Read resolution from the first frame
+    frame = load_frame(frames_dir, 0)
+    state["video_height"], state["video_width"] = frame.shape[:2]
+
+    slider_update = gr.update(
+        minimum=0, maximum=num_frames - 1, value=0, visible=True, interactive=True,
+    )
+    label_update = gr.update(value=f"第 0 帧 / 共 {num_frames - 1} 帧")
+    return (state, frame, slider_update, label_update,
+            keyframe_display(state), keyframe_gallery(state))
+
+
+def on_slider_change(frame_idx: int, state: dict):
+    """Navigate to a different frame; clear click state."""
+    if state["frames_dir"] is None:
+        return None, state, gr.update()
+
+    frame_idx = int(frame_idx)
+    state["current_frame_idx"] = frame_idx
+    state["click_points"] = []
+    state["click_labels"] = []
+    state["current_mask"] = state["keyframes"].get(frame_idx)
+
+    frame = render_frame(state)
+    label = f"第 {frame_idx} 帧 / 共 {state['num_frames'] - 1} 帧"
+    return frame, state, gr.update(value=label)
+
+
+def on_frame_click(evt: gr.SelectData, point_mode: str, state: dict):
+    """Accumulate a click point, run SAM2, and show mask overlay."""
+    if state["frames_dir"] is None:
+        return None, state
+
+    x, y = evt.index[0], evt.index[1]
+    label = 1 if point_mode == "Positive" else 0
+    state["click_points"].append([x, y])
+    state["click_labels"].append(label)
+
+    engine = _get_sam2()
+    if state["_sam2_image_idx"] != state["current_frame_idx"]:
+        raw_frame = load_frame(state["frames_dir"], state["current_frame_idx"])
+        engine.set_image(raw_frame)
+        state["_sam2_image_idx"] = state["current_frame_idx"]
+    mask = engine.predict(state["click_points"], state["click_labels"])
+    state["current_mask"] = mask
+
+    return render_frame(state), state
+
+
+def on_undo_click(state: dict):
+    """Remove last click point and re-predict."""
+    if state["frames_dir"] is None or not state["click_points"]:
+        return render_frame(state) if state["frames_dir"] else None, state
+
+    state["click_points"].pop()
+    state["click_labels"].pop()
+
+    if state["click_points"]:
+        engine = _get_sam2()
+        if state["_sam2_image_idx"] != state["current_frame_idx"]:
+            raw_frame = load_frame(state["frames_dir"], state["current_frame_idx"])
+            engine.set_image(raw_frame)
+            state["_sam2_image_idx"] = state["current_frame_idx"]
+        mask = engine.predict(state["click_points"], state["click_labels"])
+        state["current_mask"] = mask
+    else:
+        state["current_mask"] = None
+
+    return render_frame(state), state
+
+
+def on_clear_clicks(state: dict):
+    """Clear all click points and mask for the current frame."""
+    if state["frames_dir"] is None:
+        return None, state
+
+    state["click_points"] = []
+    state["click_labels"] = []
+    state["current_mask"] = None
+    return render_frame(state), state
+
+
+def on_save_keyframe(state: dict):
+    """Save current mask as a keyframe annotation."""
+    if state["current_mask"] is None:
+        gr.Warning("没有可保存的遮罩，请先在帧上点击标注。")
+        return state, keyframe_display(state), keyframe_gallery(state)
+
+    idx = state["current_frame_idx"]
+    state["keyframes"][idx] = state["current_mask"].copy()
+    log.info("Saved keyframe at frame %d", idx)
+    return state, keyframe_display(state), keyframe_gallery(state)
+
+
+def on_delete_keyframe(state: dict):
+    """Delete the keyframe at the current frame index."""
+    idx = state["current_frame_idx"]
+    if idx in state["keyframes"]:
+        del state["keyframes"][idx]
+        state["current_mask"] = None
+        log.info("Deleted keyframe at frame %d", idx)
+
+    frame = render_frame(state) if state["frames_dir"] else None
+    return state, frame, keyframe_display(state), keyframe_gallery(state)
+
+
+def on_run_propagation(
+    state: dict,
+    progress=gr.Progress(track_tqdm=True),
+):
+    """Run SAM2 VP bidirectional propagation and generate preview video."""
+    if not state["keyframes"]:
+        gr.Warning("请至少保存一个关键帧后再运行传播。")
+        return None, state
+
+    PROCESSING_LOG_FILE.write_text("")
+    log.info("========== 开始 SAM2 VP 传播 ==========")
+    log.info(
+        "关键帧: %s (%d 个)",
+        sorted(state["keyframes"].keys()),
+        len(state["keyframes"]),
+    )
+
+    engine = _get_sam2_video()
+
+    def progress_cb(frac: float):
+        progress(frac, desc="传播中...")
+
+    propagated = engine.propagate(
+        frames_dir=state["frames_dir"],
+        keyframe_masks=state["keyframes"],
+        progress_callback=progress_cb,
+    )
+    state["propagated_masks"] = propagated
+
+    # Generate preview video: overlay mask + frame number on each frame
+    log.info("生成传播预览视频...")
+    session_dir = WORKSPACE_DIR / "sessions" / state["session_id"]
+    preview_path = session_dir / "propagation_preview.mp4"
+
+    preview_path.parent.mkdir(parents=True, exist_ok=True)
+    writer = imageio.get_writer(str(preview_path), fps=state["fps"], quality=7)
+    try:
+        for idx in range(state["num_frames"]):
+            frame = load_frame(state["frames_dir"], idx)
+            mask = propagated.get(idx)
+            if mask is not None:
+                frame = overlay_mask(frame, mask)
+            frame = draw_frame_number(frame, idx)
+            writer.append_data(frame)
+    finally:
+        writer.close()
+
+    log.info("传播预览已生成: %s", preview_path.name)
+    return str(preview_path), state
+
+
+def on_start_matting(
+    erode: int,
+    dilate: int,
+    state: dict,
+    progress=gr.Progress(track_tqdm=True),
+):
+    """Run MatAnyone matting with all saved keyframes."""
+    if not state["keyframes"]:
+        gr.Warning("请至少保存一个关键帧后再开始抠像。")
+        return None, None, state
+
+    # Clear log file so the UI panel starts fresh
+    PROCESSING_LOG_FILE.write_text("")
+
+    log.info("========== 开始抠像 ==========")
+    log.info(
+        "Session: %s | 关键帧: %s | erode=%d, dilate=%d",
+        state["session_id"],
+        sorted(state["keyframes"].keys()),
+        erode,
+        dilate,
+    )
+
+    start_ts = time.time()
+    start_dt = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+    try:
+        log.info("加载帧数据 (%d 帧)...", state["num_frames"])
+        frames_tensor = load_all_frames_as_tensor(state["frames_dir"])
+
+        log.info("开始 MatAnyone 推理...")
+        engine = _get_matanyone()
+        alphas, foregrounds = engine.process(
+            frames=frames_tensor,
+            keyframe_masks=state["keyframes"],
+            erode=erode,
+            dilate=dilate,
+            warmup=DEFAULT_WARMUP,
+        )
+
+        session_dir = WORKSPACE_DIR / "sessions" / state["session_id"]
+        alpha_path = session_dir / "alpha.mp4"
+        fgr_path = session_dir / "foreground.mp4"
+
+        log.info("编码视频...")
+        alpha_rgb = np.repeat(alphas, 3, axis=3)
+        encode_video(alpha_rgb, alpha_path, state["fps"])
+        encode_video(foregrounds, fgr_path, state["fps"])
+
+        end_ts = time.time()
+        end_dt = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        processing_time = end_ts - start_ts
+
+        log.info("上传至 R2...")
+        try:
+            upload_and_notify(
+                state, erode, dilate, session_dir,
+                processing_time, start_dt, end_dt,
+            )
+        except Exception:
+            log.exception("Post-matting upload/notify failed")
+
+        log.info(
+            "========== 处理完成 (%.1fs) ==========", processing_time,
+        )
+        return str(alpha_path), str(fgr_path), state
+
+    except Exception as exc:
+        notify_failure(state.get("session_id", "unknown"), exc)
+        raise

@@ -16,6 +16,9 @@ env/
 .venv/
 .env/
 
+# Environment secrets
+.env
+
 # ML / Model weights
 *.ckpt
 *.pt
@@ -60,3 +63,7 @@ logs/
 # Hugging Face cache
 .cache/
 huggingface/
+
+sdks/*
+models/*
+workspace/*
