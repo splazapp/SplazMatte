@@ -37,7 +37,7 @@ def upload_and_notify(
     mask_paths: list[Path] = []
     for idx, mask in sorted(state["keyframes"].items()):
         mask_path = session_dir / f"keyframe_{idx:06d}.png"
-        cv2.imwrite(str(mask_path), (mask * 255).astype(np.uint8))
+        cv2.imwrite(str(mask_path), mask)
         mask_paths.append(mask_path)
 
     files_to_upload = [

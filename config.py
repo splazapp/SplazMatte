@@ -3,7 +3,11 @@
 import os
 from pathlib import Path
 
-import torch
+# Enable MPS CPU fallback for ops not yet implemented on Apple Silicon.
+# Must be set before torch initialises its MPS backend (static cache).
+os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+
+import torch  # noqa: E402
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 MODELS_DIR = PROJECT_ROOT / "models"
@@ -14,8 +18,18 @@ SDKS_DIR = PROJECT_ROOT / "sdks"
 SAM2_CHECKPOINT = MODELS_DIR / "sam2" / "sam2.1_hiera_large.pt"
 SAM2_CONFIG = "configs/sam2.1/sam2.1_hiera_l.yaml"
 
+# SAM3 (image + video predictor with text prompt support)
+SAM3_CHECKPOINT = MODELS_DIR / "sam3" / "sam3.pt"
+
 # MatAnyone (video matting)
 MATANYONE_CHECKPOINT = MODELS_DIR / "matanyone" / "matanyone.pth"
+
+# VideoMaMa (diffusion-based video matting)
+VIDEOMAMA_SVD_PATH = MODELS_DIR / "videomama" / "stable-video-diffusion-img2vid-xt"
+VIDEOMAMA_UNET_PATH = MODELS_DIR / "videomama" / "VideoMaMa"
+VIDEOMAMA_BATCH_SIZE = 16   # frames per inference batch
+VIDEOMAMA_OVERLAP = 4       # overlap frames for blending between batches
+VIDEOMAMA_SEED = 42         # random seed for reproducibility
 
 # Processing defaults
 DEFAULT_ERODE = 10

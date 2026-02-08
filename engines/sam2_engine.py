@@ -2,6 +2,7 @@
 
 import sys
 import logging
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -15,6 +16,9 @@ log = logging.getLogger(__name__)
 _sam2_root = SDKS_DIR / "sam2"
 if str(_sam2_root) not in sys.path:
     sys.path.insert(0, str(_sam2_root))
+
+# Suppress SAM2 _C CUDA extension warning on non-CUDA platforms (e.g. Mac MPS).
+warnings.filterwarnings("ignore", message="cannot import name '_C' from 'sam2'")
 
 
 class SAM2Engine:

@@ -10,6 +10,7 @@ from pathlib import Path
 import gradio as gr
 import imageio
 import numpy as np
+import torch
 
 from config import DEFAULT_WARMUP, PROCESSING_LOG_FILE, WORKSPACE_DIR
 from pipeline.video_io import (
@@ -23,12 +24,44 @@ from utils.notify import notify_failure, upload_and_notify
 
 log = logging.getLogger(__name__)
 
+
+def _clear_processing_log():
+    """Clear the processing log, properly resetting the FileHandler stream.
+
+    Using ``PROCESSING_LOG_FILE.write_text("")`` truncates the file via a
+    separate fd, but the ``logging.FileHandler`` retains its old seek
+    position.  Subsequent writes start at that offset, filling the gap
+    with null bytes that render as blank in the browser.  Instead, we
+    seek + truncate on the handler's own stream so the position is reset.
+    """
+    for handler in logging.getLogger().handlers:
+        if (
+            isinstance(handler, logging.FileHandler)
+            and Path(handler.baseFilename) == PROCESSING_LOG_FILE.resolve()
+        ):
+            handler.acquire()
+            try:
+                if handler.stream is not None:
+                    handler.stream.seek(0)
+                    handler.stream.truncate(0)
+                else:
+                    PROCESSING_LOG_FILE.write_text("")
+            finally:
+                handler.release()
+            return
+    # Fallback when no matching handler is found
+    PROCESSING_LOG_FILE.write_text("")
+
+
 # ---------------------------------------------------------------------------
 # Lazy-loaded global engines (initialized on first use)
 # ---------------------------------------------------------------------------
 _sam2_engine = None
 _sam2_video_engine = None
+_sam3_engine = None
+_sam3_video_engine = None
 _matanyone_engine = None
+_videomama_engine = None
 
 
 def _get_sam2():
@@ -47,12 +80,66 @@ def _get_sam2_video():
     return _sam2_video_engine
 
 
+def _get_sam3():
+    global _sam3_engine
+    if _sam3_engine is None:
+        from engines.sam3_engine import SAM3Engine
+        _sam3_engine = SAM3Engine()
+    return _sam3_engine
+
+
+def _get_sam3_video():
+    global _sam3_video_engine
+    if _sam3_video_engine is None:
+        from engines.sam3_video_engine import SAM3VideoEngine
+        _sam3_video_engine = SAM3VideoEngine()
+    return _sam3_video_engine
+
+
 def _get_matanyone():
     global _matanyone_engine
     if _matanyone_engine is None:
+        _unload_videomama()
         from engines.matanyone_engine import MatAnyoneEngine
         _matanyone_engine = MatAnyoneEngine()
     return _matanyone_engine
+
+
+def _get_videomama():
+    global _videomama_engine
+    if _videomama_engine is None:
+        _unload_matanyone()
+        from engines.videomama_engine import VideoMaMaEngine
+        _videomama_engine = VideoMaMaEngine()
+    return _videomama_engine
+
+
+def _unload_matanyone():
+    """Free MatAnyone from VRAM."""
+    global _matanyone_engine
+    if _matanyone_engine is not None:
+        del _matanyone_engine
+        _matanyone_engine = None
+        torch.cuda.empty_cache()
+
+
+def _unload_videomama():
+    """Free VideoMaMa from VRAM."""
+    global _videomama_engine
+    if _videomama_engine is not None:
+        del _videomama_engine
+        _videomama_engine = None
+        torch.cuda.empty_cache()
+
+
+def _get_image_engine(model_type: str):
+    """Return the image segmentation engine for the given model type."""
+    return _get_sam3() if model_type == "SAM3" else _get_sam2()
+
+
+def _get_video_engine(model_type: str):
+    """Return the video propagation engine for the given model type."""
+    return _get_sam3_video() if model_type == "SAM3" else _get_sam2_video()
 
 
 # ---------------------------------------------------------------------------
@@ -72,6 +159,7 @@ def empty_state() -> dict:
         "keyframes": {},
         "propagated_masks": {},
         "_sam2_image_idx": -1,
+        "model_type": "SAM2",
         "source_video_path": None,
         "video_file_size": 0,
         "video_format": "",
@@ -170,8 +258,8 @@ def on_slider_change(frame_idx: int, state: dict):
     return frame, state, gr.update(value=label)
 
 
-def on_frame_click(evt: gr.SelectData, point_mode: str, state: dict):
-    """Accumulate a click point, run SAM2, and show mask overlay."""
+def on_frame_click(evt: gr.SelectData, point_mode: str, model_type: str, state: dict):
+    """Accumulate a click point, run SAM prediction, and show mask overlay."""
     if state["frames_dir"] is None:
         return None, state
 
@@ -180,7 +268,7 @@ def on_frame_click(evt: gr.SelectData, point_mode: str, state: dict):
     state["click_points"].append([x, y])
     state["click_labels"].append(label)
 
-    engine = _get_sam2()
+    engine = _get_image_engine(model_type)
     if state["_sam2_image_idx"] != state["current_frame_idx"]:
         raw_frame = load_frame(state["frames_dir"], state["current_frame_idx"])
         engine.set_image(raw_frame)
@@ -191,7 +279,7 @@ def on_frame_click(evt: gr.SelectData, point_mode: str, state: dict):
     return render_frame(state), state
 
 
-def on_undo_click(state: dict):
+def on_undo_click(model_type: str, state: dict):
     """Remove last click point and re-predict."""
     if state["frames_dir"] is None or not state["click_points"]:
         return render_frame(state) if state["frames_dir"] else None, state
@@ -200,7 +288,7 @@ def on_undo_click(state: dict):
     state["click_labels"].pop()
 
     if state["click_points"]:
-        engine = _get_sam2()
+        engine = _get_image_engine(model_type)
         if state["_sam2_image_idx"] != state["current_frame_idx"]:
             raw_frame = load_frame(state["frames_dir"], state["current_frame_idx"])
             engine.set_image(raw_frame)
@@ -249,23 +337,24 @@ def on_delete_keyframe(state: dict):
 
 
 def on_run_propagation(
+    model_type: str,
     state: dict,
     progress=gr.Progress(track_tqdm=True),
 ):
-    """Run SAM2 VP bidirectional propagation and generate preview video."""
+    """Run bidirectional propagation and generate preview video."""
     if not state["keyframes"]:
         gr.Warning("请至少保存一个关键帧后再运行传播。")
         return None, state
 
-    PROCESSING_LOG_FILE.write_text("")
-    log.info("========== 开始 SAM2 VP 传播 ==========")
+    _clear_processing_log()
+    log.info("========== 开始 %s VP 传播 ==========", model_type)
     log.info(
         "关键帧: %s (%d 个)",
         sorted(state["keyframes"].keys()),
         len(state["keyframes"]),
     )
 
-    engine = _get_sam2_video()
+    engine = _get_video_engine(model_type)
 
     def progress_cb(frac: float):
         progress(frac, desc="传播中...")
@@ -299,21 +388,87 @@ def on_run_propagation(
     return str(preview_path), state
 
 
+def on_model_change(model_type: str, state: dict):
+    """Handle model selector change between SAM2 and SAM3."""
+    state["model_type"] = model_type
+    # Force re-embedding on next click
+    state["_sam2_image_idx"] = -1
+    state["click_points"] = []
+    state["click_labels"] = []
+    state["current_mask"] = None
+
+    frame = render_frame(state) if state["frames_dir"] else None
+    return state, gr.update(visible=(model_type == "SAM3")), frame
+
+
+def on_text_prompt(prompt: str, state: dict):
+    """Run SAM3 text-prompt detection on the current frame."""
+    if state["frames_dir"] is None:
+        return None, state
+    if not prompt or not prompt.strip():
+        gr.Warning("请输入文本提示词。")
+        return render_frame(state), state
+
+    engine = _get_sam3()
+    if state["_sam2_image_idx"] != state["current_frame_idx"]:
+        raw_frame = load_frame(state["frames_dir"], state["current_frame_idx"])
+        engine.set_image(raw_frame)
+        state["_sam2_image_idx"] = state["current_frame_idx"]
+
+    mask = engine.predict_text(prompt.strip())
+    state["current_mask"] = mask
+    # Clear click points — text and point modes don't mix
+    state["click_points"] = []
+    state["click_labels"] = []
+    return render_frame(state), state
+
+
 def on_start_matting(
+    matting_engine: str,
     erode: int,
     dilate: int,
+    batch_size: int,
+    overlap: int,
+    seed: int,
+    model_type: str,
     state: dict,
     progress=gr.Progress(track_tqdm=True),
 ):
-    """Run MatAnyone matting with all saved keyframes."""
+    """Run matting with the selected engine.
+
+    Auto-runs propagation first if it hasn't been executed yet.
+
+    Args:
+        matting_engine: "MatAnyone" or "VideoMaMa".
+        erode: Erosion kernel size (MatAnyone only).
+        dilate: Dilation kernel size (MatAnyone only).
+        batch_size: Frames per batch (VideoMaMa only).
+        overlap: Overlap frames between batches (VideoMaMa only).
+        seed: Random seed (VideoMaMa only).
+        model_type: "SAM2" or "SAM3" (used for auto-propagation).
+        state: Session state dict.
+        progress: Gradio progress tracker.
+    """
     if not state["keyframes"]:
         gr.Warning("请至少保存一个关键帧后再开始抠像。")
         return None, None, state
 
     # Clear log file so the UI panel starts fresh
-    PROCESSING_LOG_FILE.write_text("")
+    _clear_processing_log()
 
-    log.info("========== 开始抠像 ==========")
+    # Auto-run propagation if not done yet
+    if not state.get("propagated_masks"):
+        log.info("传播尚未执行，自动运行 %s 传播...", model_type)
+        engine = _get_video_engine(model_type)
+        propagated = engine.propagate(
+            frames_dir=state["frames_dir"],
+            keyframe_masks=state["keyframes"],
+            progress_callback=lambda f: progress(f, desc="自动传播中..."),
+        )
+        state["propagated_masks"] = propagated
+        log.info("自动传播完成，共 %d 帧遮罩", len(propagated))
+
+    log.info("========== 开始抠像 (引擎: %s) ==========", matting_engine)
     log.info(
         "Session: %s | 关键帧: %s | erode=%d, dilate=%d",
         state["session_id"],
@@ -326,18 +481,12 @@ def on_start_matting(
     start_dt = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
     try:
-        log.info("加载帧数据 (%d 帧)...", state["num_frames"])
-        frames_tensor = load_all_frames_as_tensor(state["frames_dir"])
-
-        log.info("开始 MatAnyone 推理...")
-        engine = _get_matanyone()
-        alphas, foregrounds = engine.process(
-            frames=frames_tensor,
-            keyframe_masks=state["keyframes"],
-            erode=erode,
-            dilate=dilate,
-            warmup=DEFAULT_WARMUP,
-        )
+        if matting_engine == "VideoMaMa":
+            alphas, foregrounds = _run_videomama(
+                state, int(batch_size), int(overlap), int(seed), progress,
+            )
+        else:
+            alphas, foregrounds = _run_matanyone(state, erode, dilate)
 
         session_dir = WORKSPACE_DIR / "sessions" / state["session_id"]
         alpha_path = session_dir / "alpha.mp4"
@@ -369,3 +518,66 @@ def on_start_matting(
     except Exception as exc:
         notify_failure(state.get("session_id", "unknown"), exc)
         raise
+
+
+def _run_videomama(
+    state: dict,
+    batch_size: int,
+    overlap: int,
+    seed: int,
+    progress: gr.Progress,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Run VideoMaMa matting pipeline.
+
+    Args:
+        state: Session state dict.
+        batch_size: Frames per inference batch.
+        overlap: Overlap frames between batches for blending.
+        seed: Random seed for reproducibility.
+        progress: Gradio progress tracker.
+
+    Returns:
+        Tuple of (alphas, foregrounds) arrays.
+    """
+    masks = state.get("propagated_masks", {})
+    if len(masks) < state["num_frames"]:
+        raise gr.Error(
+            "VideoMaMa 需要每帧遮罩，请先运行 SAM2 传播。"
+            f"（当前 {len(masks)}/{state['num_frames']} 帧）"
+        )
+
+    log.info(
+        "开始 VideoMaMa 推理 (%d 帧, batch=%d, overlap=%d, seed=%d)...",
+        state["num_frames"], batch_size, overlap, seed,
+    )
+    engine = _get_videomama()
+    return engine.process(
+        frames_dir=state["frames_dir"],
+        masks=masks,
+        batch_size=batch_size,
+        overlap=overlap,
+        seed=seed,
+        progress_callback=lambda f: progress(f, desc="VideoMaMa 推理中..."),
+    )
+
+
+def _run_matanyone(
+    state: dict, erode: int, dilate: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Run MatAnyone matting pipeline.
+
+    Returns:
+        Tuple of (alphas, foregrounds) arrays.
+    """
+    log.info("加载帧数据 (%d 帧)...", state["num_frames"])
+    frames_tensor = load_all_frames_as_tensor(state["frames_dir"])
+
+    log.info("开始 MatAnyone 推理...")
+    engine = _get_matanyone()
+    return engine.process(
+        frames=frames_tensor,
+        keyframe_masks=state["keyframes"],
+        erode=erode,
+        dilate=dilate,
+        warmup=DEFAULT_WARMUP,
+    )

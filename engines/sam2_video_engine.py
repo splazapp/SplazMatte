@@ -2,6 +2,7 @@
 
 import sys
 import logging
+import warnings
 from pathlib import Path
 from typing import Callable
 
@@ -16,6 +17,11 @@ log = logging.getLogger(__name__)
 _sam2_root = SDKS_DIR / "sam2"
 if str(_sam2_root) not in sys.path:
     sys.path.insert(0, str(_sam2_root))
+
+# Suppress SAM2 _C CUDA extension warning on non-CUDA platforms (e.g. Mac MPS).
+# The _C module is only needed for post-processing hole filling and its absence
+# is harmless — SAM2 skips that step automatically.
+warnings.filterwarnings("ignore", message="cannot import name '_C' from 'sam2'")
 
 
 class SAM2VideoEngine:
