@@ -61,10 +61,10 @@ if errorlevel 1 (
 echo [INFO] Activated environment: %ENV_NAME%
 
 REM ---------------------------------------------------------------------------
-REM Install PyTorch (CUDA)
+REM Install PyTorch (CUDA) via conda to ensure native DLL dependencies resolve
 REM ---------------------------------------------------------------------------
 echo [INFO] Installing PyTorch for platform: %PLATFORM%
-pip install torch==2.4.0 torchvision==0.19.0 torchaudio==2.4.0 --index-url https://download.pytorch.org/whl/cu124
+conda install pytorch==2.4.0 torchvision==0.19.0 torchaudio==2.4.0 pytorch-cuda=12.4 -c pytorch -c nvidia -y
 if errorlevel 1 (
     echo [ERROR] Failed to install PyTorch.
     pause
