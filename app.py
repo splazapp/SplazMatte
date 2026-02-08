@@ -176,7 +176,7 @@ def build_app() -> gr.Blocks:
                     info="增大可扩展遮罩边缘，保留更多细节",
                 )
                 vm_batch_slider = gr.Slider(
-                    minimum=4, maximum=64, step=4,
+                    minimum=4, maximum=128, step=4,
                     value=VIDEOMAMA_BATCH_SIZE,
                     label="批次大小",
                     info="每批推理帧数，越大越快但占用更多显存",
