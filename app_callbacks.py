@@ -1,5 +1,6 @@
 """Gradio callback functions for SplazMatte app."""
 
+import json
 import logging
 import shutil
 import time
@@ -161,6 +162,7 @@ def empty_state() -> dict:
         "_sam2_image_idx": -1,
         "model_type": "SAM2",
         "source_video_path": None,
+        "original_filename": "",
         "video_file_size": 0,
         "video_format": "",
         "video_duration": 0.0,
@@ -223,9 +225,11 @@ def on_upload(video_path: str, state: dict):
     # Copy source video into session dir (Gradio temp files may be cleaned)
     session_dir = WORKSPACE_DIR / "sessions" / session_id
     source_path = Path(video_path)
+    original_filename = source_path.name
     dest_path = session_dir / f"source{source_path.suffix}"
     shutil.copy2(source_path, dest_path)
     state["source_video_path"] = dest_path
+    state["original_filename"] = original_filename
     state["video_file_size"] = dest_path.stat().st_size
     state["video_format"] = source_path.suffix.lstrip(".")
     state["video_duration"] = num_frames / fps if fps else 0.0
@@ -233,6 +237,21 @@ def on_upload(video_path: str, state: dict):
     # Read resolution from the first frame
     frame = load_frame(frames_dir, 0)
     state["video_height"], state["video_width"] = frame.shape[:2]
+
+    # Write session metadata
+    meta = {
+        "session_id": session_id,
+        "original_filename": original_filename,
+        "num_frames": num_frames,
+        "fps": fps,
+        "video_width": state["video_width"],
+        "video_height": state["video_height"],
+        "video_duration": state["video_duration"],
+        "video_file_size": state["video_file_size"],
+        "video_format": state["video_format"],
+    }
+    meta_path = session_dir / "meta.json"
+    meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2))
 
     slider_update = gr.update(
         minimum=0, maximum=num_frames - 1, value=0, visible=True, interactive=True,

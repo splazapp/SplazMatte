@@ -35,6 +35,13 @@ from app_callbacks import (
     on_undo_click,
     on_upload,
 )
+from app_queue_ui import build_queue_section
+from queue_callbacks import (
+    on_add_to_queue,
+    on_execute_queue,
+    on_remove_from_queue,
+    on_restore_from_queue,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -70,6 +77,7 @@ def build_app() -> gr.Blocks:
         )
 
         session_state = gr.State(empty_state())
+        queue_state = gr.State([])
 
         with gr.Row():
             model_selector = gr.Radio(
@@ -146,7 +154,7 @@ def build_app() -> gr.Blocks:
                 height=400, scale=2,
             )
 
-        # ── Row 6: 参数设置 | 开始抠像 ──
+        # ── Row 6: 参数设置 | 开始抠像 + 添加到队列 ──
         with gr.Row(equal_height=True):
             with gr.Accordion("参数设置", open=True):
                 matting_engine_selector = gr.Radio(
@@ -166,7 +174,7 @@ def build_app() -> gr.Blocks:
                     info="增大可扩展遮罩边缘，保留更多细节",
                 )
                 vm_batch_slider = gr.Slider(
-                    minimum=4, maximum=32, step=4,
+                    minimum=4, maximum=128, step=4,
                     value=VIDEOMAMA_BATCH_SIZE,
                     label="批次大小",
                     info="每批推理帧数，越大越快但占用更多显存",
@@ -186,7 +194,9 @@ def build_app() -> gr.Blocks:
                     precision=0,
                     visible=False,
                 )
-            matting_btn = gr.Button("开始抠像", variant="primary", scale=1)
+            with gr.Column(scale=1, min_width=160):
+                matting_btn = gr.Button("开始抠像", variant="primary")
+                add_queue_btn = gr.Button("添加到队列", variant="secondary")
 
         # ── Row 6: Output videos + Processing log ──
         with gr.Row(equal_height=True):
@@ -208,6 +218,9 @@ def build_app() -> gr.Blocks:
                     interactive=False,
                     autoscroll=True,
                 )
+
+        # ── Row 8: Task queue ──
+        queue_ui = build_queue_section()
 
         # ── Event wiring ──
 
@@ -297,6 +310,63 @@ def build_app() -> gr.Blocks:
                 model_selector, session_state,
             ],
             outputs=[alpha_output, fgr_output, session_state],
+        )
+
+        # ── Queue event wiring ──
+
+        add_queue_btn.click(
+            fn=on_add_to_queue,
+            inputs=[
+                matting_engine_selector, erode_slider, dilate_slider,
+                vm_batch_slider, vm_overlap_slider, vm_seed_input,
+                session_state, queue_state,
+            ],
+            outputs=[
+                session_state, queue_state,
+                queue_ui["queue_status"], queue_ui["queue_table"],
+                frame_display, frame_slider, frame_label,
+                keyframe_info, kf_gallery, video_input,
+                propagation_preview, alpha_output, fgr_output,
+            ],
+            api_name=False,
+        )
+
+        queue_ui["restore_btn"].click(
+            fn=on_restore_from_queue,
+            inputs=[queue_ui["remove_idx"], session_state, queue_state],
+            outputs=[
+                session_state, queue_state,
+                queue_ui["queue_status"], queue_ui["queue_table"],
+                frame_display, frame_slider, frame_label,
+                keyframe_info, kf_gallery, video_input,
+                model_selector, text_prompt_row,
+                matting_engine_selector,
+                erode_slider, dilate_slider,
+                vm_batch_slider, vm_overlap_slider, vm_seed_input,
+                propagation_preview, alpha_output, fgr_output,
+            ],
+            api_name=False,
+        )
+
+        queue_ui["remove_btn"].click(
+            fn=on_remove_from_queue,
+            inputs=[queue_ui["remove_idx"], queue_state],
+            outputs=[
+                queue_state,
+                queue_ui["queue_status"], queue_ui["queue_table"],
+            ],
+            api_name=False,
+        )
+
+        queue_ui["execute_btn"].click(
+            fn=on_execute_queue,
+            inputs=[queue_ui["queue_progress"], queue_state],
+            outputs=[
+                queue_state,
+                queue_ui["queue_status"], queue_ui["queue_table"],
+                queue_ui["queue_progress"],
+            ],
+            api_name=False,
         )
 
     return app

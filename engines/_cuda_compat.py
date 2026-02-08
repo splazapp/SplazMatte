@@ -82,9 +82,11 @@ def patch_cuda_to_device(device: torch.device) -> None:
     torch.jit.script = _eager_jit_script  # type: ignore[assignment]
 
     # --- 5. torch.autocast: redirect device_type="cuda" → "cpu" ---
-    # SAM3 uses torch.autocast(device_type="cuda", dtype=torch.bfloat16)
-    # in several places. MPS does not support autocast; CPU autocast with
-    # bfloat16 is supported and is the safe fallback.
+    # SAM3 uses torch.autocast(device_type="cuda", dtype=torch.bfloat16),
+    # and diffusers (used by VideoMaMa/SVD) also uses autocast internally.
+    # MPS does not support autocast; CPU autocast with bfloat16 is the
+    # safe fallback.  We patch every known import path so that code
+    # importing from torch.amp or torch.cuda.amp also gets redirected.
     _OrigAutocast = torch.autocast
 
     class _PatchedAutocast(_OrigAutocast):  # type: ignore[misc]
@@ -96,6 +98,14 @@ def patch_cuda_to_device(device: torch.device) -> None:
             super().__init__(device_type, *args, **kwargs)
 
     torch.autocast = _PatchedAutocast  # type: ignore[misc]
+    # Also patch torch.amp.autocast and the underlying module so that
+    # ``from torch.amp import autocast`` picks up the redirect.
+    import torch.amp
+    import torch.amp.autocast_mode
+    torch.amp.autocast = _PatchedAutocast  # type: ignore[misc,attr-defined]
+    torch.amp.autocast_mode.autocast = _PatchedAutocast  # type: ignore[misc]
+    if hasattr(torch, "cuda") and hasattr(torch.cuda, "amp"):
+        torch.cuda.amp.autocast = _PatchedAutocast  # type: ignore[misc,attr-defined]
 
     # --- 6. F.grid_sample: fall back to CPU on MPS ---
     # MPS has a bug where grid_sample crashes with "Placeholder tensor is

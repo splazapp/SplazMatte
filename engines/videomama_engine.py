@@ -56,13 +56,12 @@ class VideoMaMaEngine:
         """
         self.device = device or get_device()
 
-        # VideoMaMa relies on CUDA fp16; warn if not available
         if self.device.type == "mps":
-            log.warning(
-                "VideoMaMa may not fully support MPS — falling back to CPU. "
-                "For best results, use a CUDA GPU with >=16 GB VRAM."
-            )
-            self.device = torch.device("cpu")
+            log.info("Using MPS device for VideoMaMa (fp32 mode).")
+
+        # Patch CUDA calls before importing the SDK (diffusers uses autocast)
+        from engines._cuda_compat import patch_cuda_to_device
+        patch_cuda_to_device(self.device)
 
         from pipeline_svd_mask import VideoInferencePipeline
 
