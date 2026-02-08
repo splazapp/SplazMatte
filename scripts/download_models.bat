@@ -17,9 +17,9 @@ set ENV_NAME=splazmatte
 set SCRIPT_DIR=%~dp0
 
 REM ---------------------------------------------------------------------------
-REM Activate conda environment
+REM Check conda environment exists
 REM ---------------------------------------------------------------------------
-call conda activate %ENV_NAME%
+conda info --envs 2>nul | findstr /c:"%ENV_NAME%" >nul 2>&1
 if errorlevel 1 (
     echo [ERROR] Conda environment '%ENV_NAME%' not found.
     echo         Run 'scripts\setup.bat' first.
@@ -28,9 +28,10 @@ if errorlevel 1 (
 )
 
 REM ---------------------------------------------------------------------------
-REM Run download script, forwarding all CLI arguments
+REM Run download script via conda run (avoids activate issues in cmd.exe)
 REM ---------------------------------------------------------------------------
-python "%SCRIPT_DIR%download_models.py" %*
+echo [INFO] Running download_models.py in '%ENV_NAME%' environment...
+conda run -n %ENV_NAME% --no-banner python "%SCRIPT_DIR%download_models.py" %*
 if errorlevel 1 (
     echo [ERROR] Model download failed.
     pause

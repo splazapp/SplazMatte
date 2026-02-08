@@ -66,12 +66,23 @@ class VideoMaMaEngine:
         from pipeline_svd_mask import VideoInferencePipeline
 
         log.info("Loading VideoMaMa pipeline (SVD: %s, UNet: %s)", svd_path, unet_path)
+        weight_dtype = torch.float16 if self.device.type == "cuda" else torch.float32
         self.pipeline = VideoInferencePipeline(
             base_model_path=str(svd_path),
             unet_checkpoint_path=str(unet_path),
             device=str(self.device),
-            weight_dtype=torch.float16 if self.device.type == "cuda" else torch.float32,
+            weight_dtype=weight_dtype,
         )
+
+        # The SDK forces CPU when CUDA is unavailable. Override to use
+        # the actual device (e.g. MPS) and move all models there.
+        if self.pipeline.device != self.device:
+            log.info("Moving VideoMaMa models to %s...", self.device)
+            self.pipeline.device = self.device
+            self.pipeline.image_encoder.to(self.device, dtype=weight_dtype).eval()
+            self.pipeline.vae.to(self.device, dtype=weight_dtype).eval()
+            self.pipeline.unet.to(self.device, dtype=weight_dtype).eval()
+
         log.info("VideoMaMa engine ready on %s", self.device)
 
     def process(
