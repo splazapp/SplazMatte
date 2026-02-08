@@ -1,15 +1,24 @@
 """Send structured notifications to Feishu (飞书) via webhook."""
 
 import logging
+import platform
 import traceback
 
 import requests
 
-from config import FEISHU_WEBHOOK_URL
+from config import FEISHU_WEBHOOK_URL, get_device
 
 log = logging.getLogger(__name__)
 
 MAX_STACKTRACE_LEN = 2000
+
+
+def _device_info() -> str:
+    """Return a short string describing the compute device and host."""
+    device = get_device()
+    device_label = {"cuda": "CUDA (GPU)", "mps": "MPS (Apple Silicon)", "cpu": "CPU"}
+    hostname = platform.node() or "unknown"
+    return f"{device_label.get(device.type, device.type)} | {hostname}"
 
 
 def _post_card(card: dict) -> None:
@@ -107,6 +116,8 @@ def send_feishu_success(
         f"- 开始: {start_time}\n"
         f"- 结束: {end_time}\n"
         f"- 总耗时: {_format_duration(processing_time)}\n\n"
+        f"**运行环境**\n"
+        f"- 设备: {_device_info()}\n\n"
         f"**输出文件**\n{links_md}"
     )
 
@@ -145,6 +156,7 @@ def send_feishu_failure(session_id: str, error: Exception) -> None:
 
     content_md = (
         f"**Session**: {session_id}\n"
+        f"**设备**: {_device_info()}\n"
         f"**错误类型**: {type(error).__name__}\n"
         f"**错误信息**: {error}\n\n"
         f"**堆栈**\n```\n{stacktrace}\n```"
