@@ -63,4 +63,4 @@ def get_device() -> torch.device:
 
 
 # Gradio server
-GRADIO_SERVER_PORT = int(os.environ.get("SPLAZMATTE_PORT", "7860"))
+GRADIO_SERVER_PORT = int(os.environ.get("SPLAZMATTE_PORT", "7870"))
