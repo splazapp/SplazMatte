@@ -64,6 +64,21 @@ logs/
 .cache/
 huggingface/
 
-sdks/*
+# SDKs — track source code only, exclude large non-essential files
+sdks/**/.git/
+sdks/gradio/
+sdks/**/assets/
+sdks/**/demo/
+sdks/**/demos/
+sdks/**/notebooks/
+sdks/**/examples/
+sdks/**/inputs/
+sdks/**/test/
+sdks/**/tests/
+sdks/**/sav_dataset/
+sdks/**/scripts/eval/
+sdks/**/js/
+sdks/**/guides/
+sdks/**/client/
 models/*
 workspace/*
