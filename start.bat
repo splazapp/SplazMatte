@@ -25,5 +25,5 @@ REM Launch app via conda run (avoids activate issues in cmd.exe)
 REM ---------------------------------------------------------------------------
 echo [INFO] Environment: %ENV_NAME%
 echo [INFO] Starting SplazMatte ...
-conda run -n %ENV_NAME% --no-banner python "%SCRIPT_DIR%app.py"
+conda run -n %ENV_NAME% python "%SCRIPT_DIR%app.py"
 pause

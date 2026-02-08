@@ -31,7 +31,7 @@ REM ---------------------------------------------------------------------------
 REM Run download script via conda run (avoids activate issues in cmd.exe)
 REM ---------------------------------------------------------------------------
 echo [INFO] Running download_models.py in '%ENV_NAME%' environment...
-conda run -n %ENV_NAME% --no-banner python "%SCRIPT_DIR%download_models.py" %*
+conda run -n %ENV_NAME% python "%SCRIPT_DIR%download_models.py" %*
 if errorlevel 1 (
     echo [ERROR] Model download failed.
     pause

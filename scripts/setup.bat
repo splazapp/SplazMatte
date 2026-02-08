@@ -43,7 +43,7 @@ REM ---------------------------------------------------------------------------
 REM Install PyTorch (CUDA) via conda run
 REM ---------------------------------------------------------------------------
 echo [INFO] Installing PyTorch for platform: %PLATFORM%
-conda run -n %ENV_NAME% --no-banner pip install torch==2.4.0 torchvision==0.19.0 torchaudio==2.4.0 --index-url https://download.pytorch.org/whl/cu124
+conda run -n %ENV_NAME% pip install torch==2.4.0 torchvision==0.19.0 torchaudio==2.4.0 --index-url https://download.pytorch.org/whl/cu124
 if errorlevel 1 (
     echo [ERROR] Failed to install PyTorch.
     pause
@@ -54,7 +54,7 @@ REM ---------------------------------------------------------------------------
 REM Install project dependencies via conda run
 REM ---------------------------------------------------------------------------
 echo [INFO] Installing project dependencies from requirements.txt...
-conda run -n %ENV_NAME% --no-banner pip install -r "%PROJECT_ROOT%\requirements.txt"
+conda run -n %ENV_NAME% pip install -r "%PROJECT_ROOT%\requirements.txt"
 if errorlevel 1 (
     echo [ERROR] Failed to install project dependencies.
     pause
@@ -66,7 +66,7 @@ REM Verify installation
 REM ---------------------------------------------------------------------------
 echo.
 echo === Verification ===
-conda run -n %ENV_NAME% --no-banner python -c "import torch; print(f'PyTorch:        {torch.__version__}'); print(f'CUDA available: {torch.cuda.is_available()}'); import huggingface_hub, diffusers, transformers, gradio; print(f'huggingface_hub: {huggingface_hub.__version__}'); print(f'diffusers:       {diffusers.__version__}'); print(f'transformers:    {transformers.__version__}'); print(f'gradio:          {gradio.__version__}'); print(); print('Setup complete!')"
+conda run -n %ENV_NAME% python -c "import torch; print(f'PyTorch:        {torch.__version__}'); print(f'CUDA available: {torch.cuda.is_available()}'); import huggingface_hub, diffusers, transformers, gradio; print(f'huggingface_hub: {huggingface_hub.__version__}'); print(f'diffusers:       {diffusers.__version__}'); print(f'transformers:    {transformers.__version__}'); print(f'gradio:          {gradio.__version__}'); print(); print('Setup complete!')"
 
 echo.
 echo To activate the environment in a new shell:
