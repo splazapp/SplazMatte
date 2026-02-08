@@ -13,6 +13,8 @@ import logging
 from typing import Any
 
 import torch
+import torch.amp
+import torch.amp.autocast_mode
 
 log = logging.getLogger(__name__)
 
@@ -100,8 +102,6 @@ def patch_cuda_to_device(device: torch.device) -> None:
     torch.autocast = _PatchedAutocast  # type: ignore[misc]
     # Also patch torch.amp.autocast and the underlying module so that
     # ``from torch.amp import autocast`` picks up the redirect.
-    import torch.amp
-    import torch.amp.autocast_mode
     torch.amp.autocast = _PatchedAutocast  # type: ignore[misc,attr-defined]
     torch.amp.autocast_mode.autocast = _PatchedAutocast  # type: ignore[misc]
     if hasattr(torch, "cuda") and hasattr(torch.cuda, "amp"):

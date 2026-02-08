@@ -7,7 +7,9 @@ from typing import Callable
 
 import numpy as np
 import torch
+from einops import rearrange
 from PIL import Image
+from torchvision import transforms
 
 from config import (
     SDKS_DIR,
@@ -57,7 +59,7 @@ class VideoMaMaEngine:
         self.device = device or get_device()
 
         if self.device.type == "mps":
-            log.info("Using MPS device for VideoMaMa (fp32 mode).")
+            log.info("Using MPS device for VideoMaMa.")
 
         # Patch CUDA calls before importing the SDK (diffusers uses autocast)
         from engines._cuda_compat import patch_cuda_to_device
@@ -66,7 +68,7 @@ class VideoMaMaEngine:
         from pipeline_svd_mask import VideoInferencePipeline
 
         log.info("Loading VideoMaMa pipeline (SVD: %s, UNet: %s)", svd_path, unet_path)
-        weight_dtype = torch.float16 if self.device.type == "cuda" else torch.float32
+        weight_dtype = torch.float32 if self.device.type == "cpu" else torch.float16
         self.pipeline = VideoInferencePipeline(
             base_model_path=str(svd_path),
             unet_checkpoint_path=str(unet_path),
@@ -112,6 +114,7 @@ class VideoMaMaEngine:
         num_frames = len(masks)
         if num_frames == 0:
             raise ValueError("At least one frame mask is required.")
+
         if overlap >= batch_size:
             raise ValueError(
                 f"Overlap ({overlap}) must be less than batch_size ({batch_size})."
@@ -141,6 +144,12 @@ class VideoMaMaEngine:
 
             # Run inference
             batch_alphas = self._process_batch(batch_frames, batch_masks, seed)
+
+            # Free intermediate tensors cached by MPS/CUDA
+            if self.device.type == "mps":
+                torch.mps.empty_cache()
+            elif self.device.type == "cuda":
+                torch.cuda.empty_cache()
 
             # Trim padding if needed
             if needs_padding:
@@ -213,6 +222,38 @@ class VideoMaMaEngine:
 
         return batch_frames, batch_masks
 
+    def _offload(self, *models: torch.nn.Module) -> None:
+        """Move models to CPU and free device cache (MPS only)."""
+        for m in models:
+            m.to("cpu")
+        if self.device.type == "mps":
+            torch.mps.empty_cache()
+
+    def _encode_to_latents(
+        self, video_tensor: torch.Tensor, chunk_size: int = 8,
+    ) -> torch.Tensor:
+        """VAE encode with chunking (mirrors the existing chunked decode).
+
+        Args:
+            video_tensor: (B, F, C, H, W) tensor in [-1, 1].
+            chunk_size: Frames per encoding chunk.
+
+        Returns:
+            (B, F, Cl, Hl, Wl) latent tensor, scaled by VAE factor.
+        """
+        vae = self.pipeline.vae
+        b, f, c, h, w = video_tensor.shape
+        frames = rearrange(video_tensor, "b f c h w -> (b f) c h w")
+        chunks = []
+        for i in range(0, frames.shape[0], chunk_size):
+            chunk = vae.encode(frames[i : i + chunk_size]).latent_dist.sample()
+            chunks.append(chunk)
+        latents = torch.cat(chunks, dim=0)
+        return rearrange(
+            latents, "(b f) c h w -> b f c h w", f=f,
+        ) * vae.config.scaling_factor
+
+    @torch.inference_mode()
     def _process_batch(
         self,
         frames_np: list[np.ndarray],
@@ -220,6 +261,9 @@ class VideoMaMaEngine:
         seed: int,
     ) -> list[np.ndarray]:
         """Run VideoMaMa inference on a single batch.
+
+        Inlines the SDK pipeline.run() logic so we can offload models
+        between stages and free intermediate tensors on MPS.
 
         Args:
             frames_np: List of (H, W, 3) uint8 RGB frames.
@@ -230,32 +274,122 @@ class VideoMaMaEngine:
             List of (H, W) uint8 alpha arrays at original resolution.
         """
         orig_h, orig_w = frames_np[0].shape[:2]
+        pipe = self.pipeline
+        dtype = pipe.weight_dtype
+        is_mps = self.device.type == "mps"
 
-        # Convert to PIL and resize to model resolution
-        cond_frames = [
-            Image.fromarray(f).resize((_MODEL_W, _MODEL_H), Image.Resampling.BILINEAR)
+        # --- 1. PIL → tensor ---
+        cond_pils = [
+            Image.fromarray(f).resize(
+                (_MODEL_W, _MODEL_H), Image.Resampling.BILINEAR,
+            )
             for f in frames_np
         ]
-        mask_frames = [
+        mask_pils = [
             Image.fromarray(m, mode="L").resize(
                 (_MODEL_W, _MODEL_H), Image.Resampling.BILINEAR,
             )
             for m in masks_np
         ]
+        cond_video = pipe._pil_to_tensor(cond_pils).to(self.device)
+        mask_video = pipe._pil_to_tensor(mask_pils).to(self.device)
+        if mask_video.shape[2] != 3:
+            mask_video = mask_video.repeat(1, 1, 3, 1, 1)
 
-        # Run pipeline
-        output_pils = self.pipeline.run(
-            cond_frames=cond_frames,
-            mask_frames=mask_frames,
-            seed=seed,
+        # --- 2. CLIP encode first frame ---
+        first_frame = cond_video[:, 0, :, :, :]
+        clip_input = pipe._resize_with_antialiasing(first_frame, (224, 224))
+        clip_input = ((clip_input + 1.0) / 2.0).clamp(0, 1)
+        pixel_values = pipe.feature_extractor(
+            images=clip_input, return_tensors="pt",
+        ).pixel_values
+        image_embeddings = pipe.image_encoder(
+            pixel_values.to(self.device, dtype=dtype),
+        ).image_embeds
+        encoder_hidden = torch.zeros_like(image_embeddings).unsqueeze(1)
+        del first_frame, clip_input, pixel_values, image_embeddings
+
+        # --- 3. Offload CLIP (no longer needed) ---
+        if is_mps:
+            self._offload(pipe.image_encoder)
+
+        # --- 4. VAE encode (chunked) ---
+        cond_latents = self._encode_to_latents(cond_video.to(dtype))
+        cond_latents = cond_latents / pipe.vae.config.scaling_factor
+        mask_latents = self._encode_to_latents(mask_video.to(dtype))
+        mask_latents = mask_latents / pipe.vae.config.scaling_factor
+        del cond_video, mask_video
+        if is_mps:
+            torch.mps.empty_cache()
+
+        # --- 5. Offload VAE (not needed during UNet) ---
+        if is_mps:
+            self._offload(pipe.vae)
+
+        # --- 6. UNet single-step inference ---
+        generator = torch.Generator(device=self.device).manual_seed(seed)
+        noisy_latents = torch.randn(
+            cond_latents.shape, generator=generator,
+            device=self.device, dtype=dtype,
+        )
+        timesteps = torch.full((1,), 1.0, device=self.device, dtype=torch.long)
+        added_time_ids = pipe._get_add_time_ids(
+            fps=7, motion_bucket_id=127, noise_aug_strength=0.0, batch_size=1,
+        )
+        unet_input = torch.cat(
+            [noisy_latents, cond_latents, mask_latents], dim=2,
+        )
+        del noisy_latents, cond_latents, mask_latents
+        if is_mps:
+            torch.mps.empty_cache()
+
+        pred_latents = pipe.unet(
+            unet_input, timesteps, encoder_hidden,
+            added_time_ids=added_time_ids,
+        ).sample
+        del unet_input, encoder_hidden, timesteps, added_time_ids
+        if is_mps:
+            torch.mps.empty_cache()
+
+        # --- 7. Offload UNet, bring VAE back for decode ---
+        if is_mps:
+            self._offload(pipe.unet)
+            pipe.vae.to(self.device, dtype=dtype)
+
+        # --- 8. VAE decode (chunked, same as SDK) ---
+        pred_latents = (
+            (1 / pipe.vae.config.scaling_factor) * pred_latents.squeeze(0)
+        )
+        decoded_chunks = []
+        for i in range(0, pred_latents.shape[0], 8):
+            chunk = pred_latents[i : i + 8]
+            decoded_chunks.append(
+                pipe.vae.decode(chunk, num_frames=chunk.shape[0]).sample,
+            )
+        video_tensor = torch.cat(decoded_chunks, dim=0)
+        del pred_latents, decoded_chunks
+        video_tensor = (
+            (video_tensor / 2.0 + 0.5).clamp(0, 1)
+            .mean(dim=1, keepdim=True)
+            .repeat(1, 3, 1, 1)
         )
 
-        # Resize back and extract alpha (grayscale channel)
+        # --- 9. Restore all models to device for next batch ---
+        if is_mps:
+            pipe.image_encoder.to(self.device, dtype=dtype)
+            pipe.unet.to(self.device, dtype=dtype)
+
+        # --- 10. To PIL → resize → alpha ---
+        # Move to CPU and free device memory before PIL conversion
+        video_tensor = video_tensor.cpu()
+        if is_mps:
+            torch.mps.empty_cache()
+
         alphas = []
-        for pil_img in output_pils:
+        for frame_tensor in video_tensor:
+            pil_img = transforms.ToPILImage()(frame_tensor)
             resized = pil_img.resize((orig_w, orig_h), Image.Resampling.BILINEAR)
-            alpha = np.array(resized.convert("L"))
-            alphas.append(alpha)
+            alphas.append(np.array(resized.convert("L")))
 
         return alphas
 

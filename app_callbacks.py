@@ -101,6 +101,7 @@ def _get_matanyone():
     global _matanyone_engine
     if _matanyone_engine is None:
         _unload_videomama()
+        _unload_sam_video()
         from engines.matanyone_engine import MatAnyoneEngine
         _matanyone_engine = MatAnyoneEngine()
     return _matanyone_engine
@@ -110,9 +111,18 @@ def _get_videomama():
     global _videomama_engine
     if _videomama_engine is None:
         _unload_matanyone()
+        _unload_sam_video()
         from engines.videomama_engine import VideoMaMaEngine
         _videomama_engine = VideoMaMaEngine()
     return _videomama_engine
+
+
+def _empty_device_cache():
+    """Release cached memory on the active device (CUDA or MPS)."""
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    elif torch.backends.mps.is_available():
+        torch.mps.empty_cache()
 
 
 def _unload_matanyone():
@@ -121,7 +131,7 @@ def _unload_matanyone():
     if _matanyone_engine is not None:
         del _matanyone_engine
         _matanyone_engine = None
-        torch.cuda.empty_cache()
+        _empty_device_cache()
 
 
 def _unload_videomama():
@@ -130,7 +140,23 @@ def _unload_videomama():
     if _videomama_engine is not None:
         del _videomama_engine
         _videomama_engine = None
-        torch.cuda.empty_cache()
+        _empty_device_cache()
+
+
+def _unload_sam_video():
+    """Free SAM2/SAM3 video engines to reclaim memory."""
+    global _sam2_video_engine, _sam3_video_engine
+    changed = False
+    if _sam2_video_engine is not None:
+        del _sam2_video_engine
+        _sam2_video_engine = None
+        changed = True
+    if _sam3_video_engine is not None:
+        del _sam3_video_engine
+        _sam3_video_engine = None
+        changed = True
+    if changed:
+        _empty_device_cache()
 
 
 def _get_image_engine(model_type: str):
