@@ -4,26 +4,28 @@ REM
 REM Usage:
 REM   start.bat
 REM
-setlocal
 
 set SCRIPT_DIR=%~dp0
 set ENV_NAME=splazmatte
 
 REM ---------------------------------------------------------------------------
-REM Check conda environment exists
+REM Activate conda environment via activate.bat (supports real-time output)
 REM ---------------------------------------------------------------------------
-conda info --envs 2>nul | findstr /c:"%ENV_NAME%" >nul 2>&1
+for /f "tokens=*" %%i in ('conda info --base 2^>nul') do set CONDA_BASE=%%i
+if not defined CONDA_BASE (
+    echo [ERROR] conda not found. Please install Anaconda or Miniconda first.
+    pause
+    exit /b 1
+)
+call "%CONDA_BASE%\Scripts\activate.bat" %ENV_NAME%
 if errorlevel 1 (
-    echo [ERROR] Conda environment '%ENV_NAME%' not found.
+    echo [ERROR] Failed to activate conda environment '%ENV_NAME%'.
     echo         Run 'scripts\setup.bat' first.
     pause
     exit /b 1
 )
 
-REM ---------------------------------------------------------------------------
-REM Launch app via conda run (avoids activate issues in cmd.exe)
-REM ---------------------------------------------------------------------------
 echo [INFO] Environment: %ENV_NAME%
 echo [INFO] Starting SplazMatte ...
-conda run -n %ENV_NAME% python "%SCRIPT_DIR%app.py"
+python "%SCRIPT_DIR%app.py"
 pause

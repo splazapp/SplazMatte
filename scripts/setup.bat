@@ -13,6 +13,16 @@ set SCRIPT_DIR=%~dp0
 set PROJECT_ROOT=%SCRIPT_DIR%..
 
 REM ---------------------------------------------------------------------------
+REM Find conda installation
+REM ---------------------------------------------------------------------------
+for /f "tokens=*" %%i in ('conda info --base 2^>nul') do set CONDA_BASE=%%i
+if not defined CONDA_BASE (
+    echo [ERROR] conda not found. Please install Anaconda or Miniconda first.
+    pause
+    exit /b 1
+)
+
+REM ---------------------------------------------------------------------------
 REM Parse args (Windows always uses CUDA)
 REM ---------------------------------------------------------------------------
 set PLATFORM=cuda
@@ -40,10 +50,21 @@ if %errorlevel%==0 (
 )
 
 REM ---------------------------------------------------------------------------
-REM Install PyTorch (CUDA) via conda run
+REM Activate environment via activate.bat
+REM ---------------------------------------------------------------------------
+call "%CONDA_BASE%\Scripts\activate.bat" %ENV_NAME%
+if errorlevel 1 (
+    echo [ERROR] Failed to activate conda environment '%ENV_NAME%'.
+    pause
+    exit /b 1
+)
+echo [INFO] Activated environment: %ENV_NAME%
+
+REM ---------------------------------------------------------------------------
+REM Install PyTorch (CUDA)
 REM ---------------------------------------------------------------------------
 echo [INFO] Installing PyTorch for platform: %PLATFORM%
-conda run -n %ENV_NAME% pip install torch==2.4.0 torchvision==0.19.0 torchaudio==2.4.0 --index-url https://download.pytorch.org/whl/cu124
+pip install torch==2.4.0 torchvision==0.19.0 torchaudio==2.4.0 --index-url https://download.pytorch.org/whl/cu124
 if errorlevel 1 (
     echo [ERROR] Failed to install PyTorch.
     pause
@@ -51,10 +72,10 @@ if errorlevel 1 (
 )
 
 REM ---------------------------------------------------------------------------
-REM Install project dependencies via conda run
+REM Install project dependencies
 REM ---------------------------------------------------------------------------
 echo [INFO] Installing project dependencies from requirements.txt...
-conda run -n %ENV_NAME% pip install -r "%PROJECT_ROOT%\requirements.txt"
+pip install -r "%PROJECT_ROOT%\requirements.txt"
 if errorlevel 1 (
     echo [ERROR] Failed to install project dependencies.
     pause
@@ -66,7 +87,7 @@ REM Verify installation
 REM ---------------------------------------------------------------------------
 echo.
 echo === Verification ===
-conda run -n %ENV_NAME% python -c "import torch; print(f'PyTorch:        {torch.__version__}'); print(f'CUDA available: {torch.cuda.is_available()}'); import huggingface_hub, diffusers, transformers, gradio; print(f'huggingface_hub: {huggingface_hub.__version__}'); print(f'diffusers:       {diffusers.__version__}'); print(f'transformers:    {transformers.__version__}'); print(f'gradio:          {gradio.__version__}'); print(); print('Setup complete!')"
+python -c "import torch; print(f'PyTorch:        {torch.__version__}'); print(f'CUDA available: {torch.cuda.is_available()}'); import huggingface_hub, diffusers, transformers, gradio; print(f'huggingface_hub: {huggingface_hub.__version__}'); print(f'diffusers:       {diffusers.__version__}'); print(f'transformers:    {transformers.__version__}'); print(f'gradio:          {gradio.__version__}'); print(); print('Setup complete!')"
 
 echo.
 echo To activate the environment in a new shell:

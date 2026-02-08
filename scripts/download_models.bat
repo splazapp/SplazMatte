@@ -11,27 +11,32 @@ REM   scripts\download_models.bat --matanyone  # MatAnyone only
 REM   scripts\download_models.bat --videomama  # VideoMaMa only
 REM   scripts\download_models.bat --verify     # verify existing downloads
 REM
-setlocal
 
 set ENV_NAME=splazmatte
 set SCRIPT_DIR=%~dp0
 
 REM ---------------------------------------------------------------------------
-REM Check conda environment exists
+REM Activate conda environment via activate.bat (supports real-time output)
 REM ---------------------------------------------------------------------------
-conda info --envs 2>nul | findstr /c:"%ENV_NAME%" >nul 2>&1
+for /f "tokens=*" %%i in ('conda info --base 2^>nul') do set CONDA_BASE=%%i
+if not defined CONDA_BASE (
+    echo [ERROR] conda not found. Please install Anaconda or Miniconda first.
+    pause
+    exit /b 1
+)
+call "%CONDA_BASE%\Scripts\activate.bat" %ENV_NAME%
 if errorlevel 1 (
-    echo [ERROR] Conda environment '%ENV_NAME%' not found.
+    echo [ERROR] Failed to activate conda environment '%ENV_NAME%'.
     echo         Run 'scripts\setup.bat' first.
     pause
     exit /b 1
 )
 
 REM ---------------------------------------------------------------------------
-REM Run download script via conda run (avoids activate issues in cmd.exe)
+REM Run download script, forwarding all CLI arguments
 REM ---------------------------------------------------------------------------
 echo [INFO] Running download_models.py in '%ENV_NAME%' environment...
-conda run -n %ENV_NAME% python "%SCRIPT_DIR%download_models.py" %*
+python "%SCRIPT_DIR%download_models.py" %*
 if errorlevel 1 (
     echo [ERROR] Model download failed.
     pause
