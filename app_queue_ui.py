@@ -20,10 +20,22 @@ def build_queue_section() -> dict:
         wrap=True,
     )
     with gr.Row():
-        remove_idx = gr.Number(
-            value=1, label="序号", precision=0, minimum=1, scale=1,
-        )
         with gr.Column(scale=1):
+            gr.Markdown(
+                "<small>"
+                "**恢复编辑** 将指定序号任务恢复到编辑区<br>"
+                "**移除** 从队列中删除指定序号任务<br>"
+                "**清空队列** 移除所有任务<br>"
+                "**重置状态** 将所有任务重置为 pending<br>"
+                "**执行队列** 执行所有 pending 任务<br>"
+                "**发送飞书通知** 为已完成任务重发通知<br>"
+                "**打包下载** 将已完成结果打包为 zip"
+                "</small>"
+            )
+        with gr.Column(scale=1):
+            remove_idx = gr.Number(
+                value=1, label="序号", precision=0, minimum=1,
+            )
             restore_btn = gr.Button("恢复编辑")
             remove_btn = gr.Button("移除")
             clear_btn = gr.Button("清空队列", variant="stop")
@@ -32,17 +44,6 @@ def build_queue_section() -> dict:
             feishu_btn = gr.Button("发送飞书通知")
             download_btn = gr.Button("打包下载")
             download_file = gr.File(label="下载结果", interactive=False)
-            gr.Markdown(
-                "<small>"
-                "**恢复编辑** 将指定序号任务恢复到编辑区 · "
-                "**移除** 从队列中删除指定序号任务 · "
-                "**清空队列** 移除所有任务<br>"
-                "**重置状态** 将所有任务重置为 pending · "
-                "**执行队列** 执行所有 pending 任务<br>"
-                "**发送飞书通知** 为已完成任务重发通知 · "
-                "**打包下载** 将已完成结果打包为 zip"
-                "</small>"
-            )
     queue_progress = gr.Markdown("")
 
     return {
