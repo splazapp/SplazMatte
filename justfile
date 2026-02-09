@@ -5,7 +5,7 @@
 env_name := "splazmatte"
 
 # Python binary inside the conda env
-python := "/Users/wangtong/anaconda3/envs/" + env_name + "/bin/python"
+python := "conda run -n " + env_name + " --no-capture-output python"
 
 # Project root (where this justfile lives)
 root := justfile_directory()
