@@ -26,9 +26,9 @@ def build_queue_section() -> dict:
             restore_btn = gr.Button("恢复编辑")
             remove_btn = gr.Button("移除")
             clear_btn = gr.Button("清空队列", variant="stop")
+            download_file = gr.File(label="下载结果", interactive=False)
     execute_btn = gr.Button("执行队列", variant="primary")
     queue_progress = gr.Markdown("")
-    download_file = gr.File(label="下载结果", visible=False, interactive=False)
 
     return {
         "queue_status": queue_status,

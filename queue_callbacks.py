@@ -371,7 +371,7 @@ def on_execute_queue(
             _queue_status_text(queue),
             _queue_table_data(queue),
             "没有待处理的任务。",
-            gr.update(value=None, visible=False),
+            gr.update(value=None),
         )
 
     _clear_processing_log()
@@ -394,10 +394,7 @@ def on_execute_queue(
 
     # Pack results zip
     zip_path = _pack_results_zip(queue)
-    if zip_path is not None:
-        download_update = gr.update(value=str(zip_path), visible=True)
-    else:
-        download_update = gr.update(value=None, visible=False)
+    download_update = gr.update(value=str(zip_path) if zip_path else None)
 
     return (
         queue,
