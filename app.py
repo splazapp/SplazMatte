@@ -140,6 +140,14 @@ def build_app() -> gr.Blocks:
                         restore_session_btn = gr.Button(
                             "恢复", variant="secondary", scale=0, min_width=50,
                         )
+                    gr.Markdown(
+                        "<small>"
+                        "**上传视频**: 上传新视频后自动提取帧并创建 Session<br>"
+                        "**恢复 Session**: 从下拉列表选择历史 Session 继续编辑<br>"
+                        "**刷新**: 重新加载 Session 列表 · "
+                        "**恢复**: 加载选中的 Session"
+                        "</small>"
+                    )
 
         # ── Step 2: 标注关键帧 ──
         with gr.Accordion("Step 2: 标注关键帧", open=True):
