@@ -12,10 +12,6 @@ import gradio as gr
 
 from app_callbacks import (
     _clear_processing_log,
-    _load_session,
-    _run_matting_task,
-    _save_session_state,
-    empty_state,
     keyframe_display,
     keyframe_gallery,
     render_frame,
@@ -28,8 +24,9 @@ from config import (
     VIDEOMAMA_SEED,
     WORKSPACE_DIR,
 )
+from matting_runner import execute_queue
 from queue_models import load_queue, save_queue
-from utils.notify import notify_failure
+from session_store import empty_state, load_session, save_session_state
 
 log = logging.getLogger(__name__)
 
@@ -139,7 +136,7 @@ def on_add_to_queue(
     session_state["seed"] = int(seed)
     session_state["task_status"] = "pending"
     session_state["error_msg"] = ""
-    _save_session_state(session_state)
+    save_session_state(session_state)
 
     # Add to queue (dedup by session_id)
     queue = load_queue()
@@ -252,7 +249,7 @@ def on_restore_from_queue(
         return no_update
 
     sid = queue[idx]
-    loaded = _load_session(sid)
+    loaded = load_session(sid)
     if loaded is None:
         gr.Warning(f"无法加载 Session: {sid}")
         return no_update
@@ -322,23 +319,21 @@ def on_execute_queue(
 ):
     """Execute all pending queue items sequentially.
 
-    Reads the latest queue from disk, loads each session, and runs
-    the shared matting pipeline. Status is written back to state.json.
+    Delegates to ``matting_runner.execute_queue`` for the actual work,
+    then updates Gradio UI components with results.
 
     Returns:
         Tuple of (queue_state, queue_status, queue_table, queue_progress).
     """
     queue = load_queue()
 
-    # Filter to pending sessions
-    pending_sids: list[str] = []
-    for sid in queue:
-        info = _read_session_info(sid)
-        status = info.get("task_status", "") if info else ""
-        if status in ("pending", ""):
-            pending_sids.append(sid)
-
-    if not pending_sids:
+    # Check if there are any pending tasks before clearing the log
+    has_pending = any(
+        (info := _read_session_info(sid)) is not None
+        and info.get("task_status", "") in ("pending", "")
+        for sid in queue
+    )
+    if not has_pending:
         gr.Warning("队列中没有待处理的任务。")
         return (
             queue,
@@ -348,53 +343,19 @@ def on_execute_queue(
         )
 
     _clear_processing_log()
-    total = len(pending_sids)
-    log.info("========== 开始执行队列 (%d 个任务) ==========", total)
 
-    done_count = 0
-    error_count = 0
-    timings: list[str] = []
+    def progress_cb(frac: float, desc: str = ""):
+        progress(frac, desc=desc)
 
-    for i, sid in enumerate(pending_sids, start=1):
-        loaded = _load_session(sid)
-        if loaded is None:
-            log.warning("Cannot load session %s, skipping", sid)
-            timings.append(f"{sid}: 加载失败")
-            error_count += 1
-            continue
+    done_count, error_count, timings = execute_queue(progress_cb)
 
-        video_name = loaded.get("original_filename", sid)
-        log.info("--- 任务 %d/%d: session=%s, video=%s ---", i, total, sid, video_name)
-
-        loaded["task_status"] = "processing"
-        loaded["error_msg"] = ""
-        _save_session_state(loaded)
-
-        try:
-            prefix = f"[{i}/{total}]"
-            _, _, elapsed = _run_matting_task(loaded, progress, prefix)
-            loaded["task_status"] = "done"
-            _save_session_state(loaded)
-            done_count += 1
-            timings.append(f"{video_name}: {elapsed:.1f}s")
-        except Exception as exc:
-            loaded["task_status"] = "error"
-            loaded["error_msg"] = str(exc)
-            _save_session_state(loaded)
-            error_count += 1
-            log.exception("任务失败 (session=%s): %s", sid, exc)
-            notify_failure(sid, exc)
-            timings.append(f"{video_name}: 失败")
-
-    # Final summary
+    # Build summary
     summary_parts = [f"**队列执行完毕**: {done_count} 成功"]
     if error_count:
         summary_parts[0] += f", {error_count} 失败"
     for t in timings:
         summary_parts.append(f"- {t}")
     summary = "\n".join(summary_parts)
-
-    log.info("========== 队列执行完毕: %d 成功, %d 失败 ==========", done_count, error_count)
 
     # Re-read queue from disk for latest state
     queue = load_queue()

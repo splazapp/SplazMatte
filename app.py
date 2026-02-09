@@ -27,9 +27,7 @@ from config import (
     get_device,
 )
 from app_callbacks import (
-    empty_state,
     keyframe_gallery,
-    list_sessions,
     on_clear_clicks,
     on_delete_keyframe,
     on_frame_click,
@@ -44,6 +42,7 @@ from app_callbacks import (
     on_undo_click,
     on_upload,
 )
+from session_store import empty_state, list_sessions
 from app_queue_ui import build_queue_section
 from utils.feishu_notify import send_feishu_startup
 from queue_callbacks import (
