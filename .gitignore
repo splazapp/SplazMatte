@@ -58,6 +58,7 @@ weights/
 # OS
 .DS_Store
 Thumbs.db
+nul
 
 # Logs
 *.log
@@ -83,5 +84,5 @@ sdks/**/scripts/eval/
 sdks/**/js/
 sdks/**/guides/
 sdks/**/client/
-models/*
-workspace/*
+models/
+workspace/

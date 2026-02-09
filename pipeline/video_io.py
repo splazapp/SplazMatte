@@ -66,7 +66,9 @@ def load_frame(frames_dir: Path, frame_idx: int) -> np.ndarray:
     """
     # ffmpeg outputs 1-based filenames
     path = frames_dir / f"{frame_idx + 1:06d}.jpg"
-    img = cv2.imread(str(path))
+    # cv2.imread cannot handle non-ASCII paths on Windows; use imdecode
+    data = np.fromfile(str(path), dtype=np.uint8)
+    img = cv2.imdecode(data, cv2.IMREAD_COLOR)
     if img is None:
         raise FileNotFoundError(f"Frame not found: {path}")
     return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
@@ -87,7 +89,8 @@ def load_all_frames_as_tensor(frames_dir: Path) -> torch.Tensor:
     log.info("Loading %d frames from %s", len(paths), frames_dir)
     frames = []
     for p in tqdm(paths, desc="加载帧数据", unit="帧"):
-        img = cv2.imread(str(p))
+        data = np.fromfile(str(p), dtype=np.uint8)
+        img = cv2.imdecode(data, cv2.IMREAD_COLOR)
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         frames.append(img)
     # (T, H, W, C) -> (T, C, H, W)

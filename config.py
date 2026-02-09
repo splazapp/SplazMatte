@@ -32,9 +32,11 @@ MATANYONE_CHECKPOINT = MODELS_DIR / "matanyone" / "matanyone.pth"
 VIDEOMAMA_SVD_PATH = MODELS_DIR / "videomama" / "stable-video-diffusion-img2vid-xt"
 VIDEOMAMA_UNET_PATH = MODELS_DIR / "videomama" / "VideoMaMa"
 VIDEOMAMA_BATCH_SIZE = (
-    64 if torch.backends.mps.is_available() else 16
+    40 if torch.backends.mps.is_available() else 8
 )
-VIDEOMAMA_OVERLAP = 4       # overlap frames for blending between batches
+VIDEOMAMA_OVERLAP = (
+    2 if torch.backends.mps.is_available() else 0
+)
 VIDEOMAMA_SEED = 42         # random seed for reproducibility
 
 # Processing defaults
