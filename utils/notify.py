@@ -8,7 +8,7 @@ import numpy as np
 
 from config import DEFAULT_WARMUP
 from utils.feishu_notify import send_feishu_failure, send_feishu_success
-from utils.r2_upload import upload_session_to_r2
+from utils.storage import upload_session
 
 log = logging.getLogger(__name__)
 
@@ -22,7 +22,7 @@ def upload_and_notify(
     start_time: str,
     end_time: str,
 ) -> None:
-    """Upload results to R2 and send Feishu success notification.
+    """Upload results to cloud storage and send Feishu success notification.
 
     Args:
         state: Session state dict containing keyframes, video info, etc.
@@ -50,7 +50,7 @@ def upload_and_notify(
     ]
     files_to_upload = [Path(f) for f in files_to_upload if f is not None]
 
-    cdn_urls = upload_session_to_r2(state["session_id"], files_to_upload)
+    cdn_urls = upload_session(state["session_id"], files_to_upload)
 
     source_name = (
         Path(state["source_video_path"]).name

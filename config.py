@@ -54,6 +54,17 @@ R2_SECRET_KEY = os.environ.get("SPLAZMATTE_R2_SECRET_KEY", "")
 R2_CDN_DOMAIN = os.environ.get("SPLAZMATTE_R2_CDN_DOMAIN", "")
 R2_PREFIX = os.environ.get("SPLAZMATTE_R2_PREFIX", "splazmatte")
 
+# Storage backend: "r2" | "oss" | "" (disabled)
+STORAGE_BACKEND = os.environ.get("SPLAZMATTE_STORAGE_BACKEND", "").lower()
+
+# Aliyun OSS
+OSS_ACCESS_KEY_ID = os.environ.get("SPLAZMATTE_OSS_ACCESS_KEY_ID", "")
+OSS_ACCESS_KEY_SECRET = os.environ.get("SPLAZMATTE_OSS_ACCESS_KEY_SECRET", "")
+OSS_BUCKET = os.environ.get("SPLAZMATTE_OSS_BUCKET", "")
+OSS_ENDPOINT = os.environ.get("SPLAZMATTE_OSS_ENDPOINT", "")
+OSS_CDN_DOMAIN = os.environ.get("SPLAZMATTE_OSS_CDN_DOMAIN", "")
+OSS_PREFIX = os.environ.get("SPLAZMATTE_OSS_PREFIX", "splazmatte")
+
 # 飞书机器人
 FEISHU_WEBHOOK_URL = os.environ.get("SPLAZMATTE_FEISHU_WEBHOOK_URL", "")
 

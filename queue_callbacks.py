@@ -6,6 +6,7 @@ All task data (matting params, status) lives in each session's state.json.
 
 import json
 import logging
+import zipfile
 from pathlib import Path
 
 import gradio as gr
@@ -312,6 +313,35 @@ def on_restore_from_queue(
     )
 
 
+def _pack_results_zip(queue: list[str]) -> Path | None:
+    """Pack alpha.mp4 and foreground.mp4 from all done sessions into a zip.
+
+    Args:
+        queue: List of session IDs to check.
+
+    Returns:
+        Path to the zip file, or None if no successful results.
+    """
+    zip_path = WORKSPACE_DIR / "results.zip"
+    packed = 0
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for sid in queue:
+            info = _read_session_info(sid)
+            if info is None or info.get("task_status") != "done":
+                continue
+            session_dir = WORKSPACE_DIR / "sessions" / sid
+            video_name = Path(info.get("original_filename", sid)).stem
+            for filename in ("alpha.mp4", "foreground.mp4"):
+                src = session_dir / filename
+                if src.exists():
+                    zf.write(src, f"{video_name}/{filename}")
+                    packed += 1
+    if packed == 0:
+        zip_path.unlink(missing_ok=True)
+        return None
+    return zip_path
+
+
 def on_execute_queue(
     _queue_progress: str,
     queue_state: list[str],
@@ -323,7 +353,8 @@ def on_execute_queue(
     then updates Gradio UI components with results.
 
     Returns:
-        Tuple of (queue_state, queue_status, queue_table, queue_progress).
+        Tuple of (queue_state, queue_status, queue_table, queue_progress,
+        download_file).
     """
     queue = load_queue()
 
@@ -340,6 +371,7 @@ def on_execute_queue(
             _queue_status_text(queue),
             _queue_table_data(queue),
             "没有待处理的任务。",
+            gr.update(value=None, visible=False),
         )
 
     _clear_processing_log()
@@ -359,11 +391,20 @@ def on_execute_queue(
 
     # Re-read queue from disk for latest state
     queue = load_queue()
+
+    # Pack results zip
+    zip_path = _pack_results_zip(queue)
+    if zip_path is not None:
+        download_update = gr.update(value=str(zip_path), visible=True)
+    else:
+        download_update = gr.update(value=None, visible=False)
+
     return (
         queue,
         _queue_status_text(queue),
         _queue_table_data(queue),
         summary,
+        download_update,
     )
 
 

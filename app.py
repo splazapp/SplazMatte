@@ -446,6 +446,7 @@ def build_app() -> gr.Blocks:
                 queue_state,
                 queue_ui["queue_status"], queue_ui["queue_table"],
                 queue_ui["queue_progress"],
+                queue_ui["download_file"],
             ],
             api_name=False,
         )
