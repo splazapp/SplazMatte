@@ -28,6 +28,7 @@ from config import (
 from matting_runner import execute_queue
 from queue_models import load_queue, save_queue
 from session_store import empty_state, load_session, save_session_state
+from utils.notify import upload_and_notify
 
 log = logging.getLogger(__name__)
 
@@ -410,6 +411,59 @@ def on_pack_download(queue_state: list[str]):
         gr.Warning("没有可打包的结果（队列中无已完成的任务）。")
         return gr.update(value=None)
     return gr.update(value=str(zip_path))
+
+
+def on_send_feishu(queue_state: list[str]):
+    """Send Feishu notification for each completed task in the queue.
+
+    Re-uploads results and sends a Feishu card for every session whose
+    ``task_status`` is ``"done"``.  Falls back to default timing values
+    when persisted timing info is missing (older sessions).
+
+    Returns:
+        Nothing (uses gr.Info / gr.Warning for user feedback).
+    """
+    queue = load_queue()
+    done_sids: list[str] = []
+    for sid in queue:
+        info = _read_session_info(sid)
+        if info and info.get("task_status") == "done":
+            done_sids.append(sid)
+
+    if not done_sids:
+        gr.Warning("队列中没有已完成的任务，无法发送通知。")
+        return
+
+    success = 0
+    failed = 0
+    for sid in done_sids:
+        loaded = load_session(sid)
+        if loaded is None:
+            log.warning("Cannot load session %s for Feishu notify, skipping", sid)
+            failed += 1
+            continue
+
+        erode = int(loaded.get("erode", DEFAULT_ERODE))
+        dilate = int(loaded.get("dilate", DEFAULT_DILATE))
+        session_dir = WORKSPACE_DIR / "sessions" / sid
+        processing_time = loaded.get("processing_time", 0.0)
+        start_time = loaded.get("start_time", "N/A")
+        end_time = loaded.get("end_time", "N/A")
+
+        try:
+            upload_and_notify(
+                loaded, erode, dilate, session_dir,
+                processing_time, start_time, end_time,
+            )
+            success += 1
+        except Exception:
+            log.exception("Feishu notify failed for session %s", sid)
+            failed += 1
+
+    if failed:
+        gr.Info(f"飞书通知: {success} 条发送成功，{failed} 条失败。")
+    else:
+        gr.Info(f"飞书通知: {success} 条全部发送成功。")
 
 
 def on_load_queue():

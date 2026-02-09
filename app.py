@@ -50,6 +50,7 @@ from queue_callbacks import (
     on_pack_download,
     on_remove_from_queue,
     on_restore_from_queue,
+    on_send_feishu,
 )
 
 logging.basicConfig(
@@ -455,6 +456,13 @@ def build_app() -> gr.Blocks:
             fn=on_pack_download,
             inputs=[queue_state],
             outputs=[queue_ui["download_file"]],
+            api_name=False,
+        )
+
+        queue_ui["feishu_btn"].click(
+            fn=on_send_feishu,
+            inputs=[queue_state],
+            outputs=[],
             api_name=False,
         )
 

@@ -297,6 +297,11 @@ def run_matting_task(
     end_dt = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     processing_time = end_ts - start_ts
 
+    # Persist timing info so manual re-send can access them
+    state["processing_time"] = processing_time
+    state["start_time"] = start_dt
+    state["end_time"] = end_dt
+
     log.info("上传至 R2...")
     try:
         upload_and_notify(
