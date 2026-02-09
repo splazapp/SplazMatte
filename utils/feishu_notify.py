@@ -1,5 +1,6 @@
 """Send structured notifications to Feishu (飞书) via webhook."""
 
+import ipaddress
 import logging
 import platform
 import socket
@@ -13,17 +14,38 @@ log = logging.getLogger(__name__)
 
 MAX_STACKTRACE_LEN = 2000
 
+_RFC1918 = (
+    ipaddress.IPv4Network("10.0.0.0/8"),
+    ipaddress.IPv4Network("172.16.0.0/12"),
+    ipaddress.IPv4Network("192.168.0.0/16"),
+)
+
 
 def _lan_ip() -> str:
-    """Detect the LAN IP address via UDP socket routing (no data sent)."""
+    """Detect the LAN IP that other devices on the same network can reach.
+
+    Prefers RFC 1918 addresses (192.168.x.x, 10.x.x.x, 172.16-31.x.x)
+    so that VPN/tunnel IPs (e.g. 198.18.x.x) are skipped.
+    """
+    candidates: list[str] = []
+    # Collect IPs from hostname resolution
     try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        ip = s.getsockname()[0]
-        s.close()
-        return ip
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            candidates.append(info[4][0])
     except Exception:
-        return "127.0.0.1"
+        pass
+    # Collect IP from UDP socket routing (original method)
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            candidates.append(s.getsockname()[0])
+    except Exception:
+        pass
+    # Prefer RFC 1918 addresses (reachable on the local network)
+    for ip in candidates:
+        if any(ipaddress.IPv4Address(ip) in net for net in _RFC1918):
+            return ip
+    return candidates[0] if candidates else "127.0.0.1"
 
 
 def _device_info() -> str:
@@ -67,7 +89,8 @@ def _format_duration(seconds: float) -> str:
 
 def send_feishu_startup(local_url: str) -> None:
     """Send a startup notification with the LAN URL."""
-    lan_url = local_url.replace("0.0.0.0", _lan_ip()).replace("127.0.0.1", _lan_ip())
+    ip = _lan_ip()
+    lan_url = local_url.replace("localhost", ip).replace("0.0.0.0", ip).replace("127.0.0.1", ip)
     content_md = (
         f"**局域网链接**: [{lan_url}]({lan_url})\n"
         f"**设备**: {_device_info()}"

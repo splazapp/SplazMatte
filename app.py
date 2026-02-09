@@ -29,10 +29,13 @@ from config import (
 from app_callbacks import (
     empty_state,
     keyframe_gallery,
+    list_sessions,
     on_clear_clicks,
     on_delete_keyframe,
     on_frame_click,
     on_model_change,
+    on_refresh_sessions,
+    on_restore_session,
     on_run_propagation,
     on_save_keyframe,
     on_slider_change,
@@ -45,7 +48,9 @@ from app_queue_ui import build_queue_section
 from utils.feishu_notify import send_feishu_startup
 from queue_callbacks import (
     on_add_to_queue,
+    on_clear_queue,
     on_execute_queue,
+    on_load_queue,
     on_remove_from_queue,
     on_restore_from_queue,
 )
@@ -115,148 +120,161 @@ def build_app() -> gr.Blocks:
         session_state = gr.State(empty_state())
         queue_state = gr.State([])
 
-        with gr.Row():
-            model_selector = gr.Radio(
-                choices=["SAM2", "SAM3"],
-                value="SAM2",
-                label="标注模型",
-                info="SAM3 支持文本提示词，但模型更大、加载更慢",
-            )
-
-        # ── Row 1: Upload + Frame annotation side by side ──
-        with gr.Row(equal_height=True):
-            with gr.Column(scale=1):
-                video_input = gr.Video(
-                    label="上传视频",
-                    height=400,
-                )
-            with gr.Column(scale=2):
-                frame_display = gr.Image(
-                    label="帧预览",
-                    type="numpy", interactive=False, height=400,
-                )
-                with gr.Row(visible=False) as text_prompt_row:
-                    text_prompt_input = gr.Textbox(
-                        label="文本提示词",
-                        placeholder="输入描述，如：person, car, dog...",
-                        scale=3,
+        # ── Step 1: 上传视频 / 恢复 Session ──
+        with gr.Accordion("Step 1: 上传视频 / 恢复 Session", open=True):
+            with gr.Row():
+                with gr.Column(scale=2):
+                    video_input = gr.Video(
+                        label="上传视频",
+                        height=300,
                     )
-                    text_prompt_btn = gr.Button(
-                        "检测", variant="primary", scale=1,
+                with gr.Column(scale=1):
+                    session_dropdown = gr.Dropdown(
+                        choices=list_sessions(),
+                        label="恢复 Session",
+                        interactive=True,
+                    )
+                    with gr.Row():
+                        refresh_sessions_btn = gr.Button(
+                            "刷新", scale=0, min_width=50,
+                        )
+                        restore_session_btn = gr.Button(
+                            "恢复", variant="secondary", scale=0, min_width=50,
+                        )
+
+        # ── Step 2: 标注关键帧 ──
+        with gr.Accordion("Step 2: 标注关键帧", open=True):
+            with gr.Row():
+                model_selector = gr.Radio(
+                    choices=["SAM2", "SAM3"],
+                    value="SAM2",
+                    label="标注模型",
+                    info="SAM3 支持文本提示词，但模型更大、加载更慢",
+                    scale=1,
+                )
+                point_mode = gr.Radio(
+                    choices=["Positive", "Negative"],
+                    value="Positive",
+                    label="点击模式",
+                    info="Positive 标记前景区域，Negative 标记背景区域",
+                    scale=1,
+                )
+                undo_btn = gr.Button("撤销点击", scale=0)
+                clear_btn = gr.Button("清除所有点", scale=0)
+                save_kf_btn = gr.Button(
+                    "保存为关键帧", variant="primary", scale=0,
+                )
+                delete_kf_btn = gr.Button("删除关键帧", scale=0)
+            with gr.Row():
+                with gr.Column(scale=2):
+                    frame_display = gr.Image(
+                        label="帧预览",
+                        type="numpy", interactive=False, height=450,
+                    )
+                    with gr.Row(visible=False) as text_prompt_row:
+                        text_prompt_input = gr.Textbox(
+                            label="文本提示词",
+                            placeholder="输入描述，如：person, car, dog...",
+                            scale=3,
+                        )
+                        text_prompt_btn = gr.Button(
+                            "检测", variant="primary", scale=1,
+                        )
+                with gr.Column(scale=1):
+                    keyframe_info = gr.Markdown("尚未保存任何关键帧。")
+                    kf_gallery = gr.Gallery(
+                        label="关键帧列表",
+                        columns=4,
+                        object_fit="contain",
+                        height=450,
+                    )
+            with gr.Row():
+                frame_slider = gr.Slider(
+                    minimum=0, maximum=1, step=1, value=0,
+                    label="帧序号",
+                    info="拖动滑块可在不同帧之间切换",
+                    visible=False, interactive=True,
+                )
+                frame_label = gr.Markdown("请先上传视频。")
+
+        # ── Step 3: 传播 ──
+        with gr.Accordion("Step 3: 传播", open=True):
+            with gr.Row(equal_height=True):
+                propagate_btn = gr.Button(
+                    "运行传播", variant="secondary", scale=0,
+                )
+                propagation_preview = gr.Video(
+                    label="传播预览（右上角标注帧序号）",
+                    height=400, scale=2,
+                )
+
+        # ── Step 4: 抠像 ──
+        with gr.Accordion("Step 4: 抠像", open=True):
+            with gr.Row(equal_height=True):
+                with gr.Accordion("参数设置", open=True):
+                    matting_engine_selector = gr.Radio(
+                        choices=["MatAnyone", "VideoMaMa"],
+                        value="MatAnyone",
+                        label="抠图引擎",
+                        info="MatAnyone 适合人物（快速），VideoMaMa 适合通用场景（需先运行传播）",
+                    )
+                    erode_slider = gr.Slider(
+                        minimum=0, maximum=30, step=1, value=DEFAULT_ERODE,
+                        label="腐蚀核大小",
+                        info="增大可收缩遮罩边缘，去除毛刺",
+                    )
+                    dilate_slider = gr.Slider(
+                        minimum=0, maximum=30, step=1, value=DEFAULT_DILATE,
+                        label="膨胀核大小",
+                        info="增大可扩展遮罩边缘，保留更多细节",
+                    )
+                    vm_batch_slider = gr.Slider(
+                        minimum=4, maximum=128, step=4,
+                        value=VIDEOMAMA_BATCH_SIZE,
+                        label="批次大小",
+                        info="每批推理帧数，越大越快但占用更多显存",
+                        visible=False,
+                    )
+                    vm_overlap_slider = gr.Slider(
+                        minimum=0, maximum=8, step=1,
+                        value=VIDEOMAMA_OVERLAP,
+                        label="重叠帧数",
+                        info="批次间重叠帧数，用于平滑过渡",
+                        visible=False,
+                    )
+                    vm_seed_input = gr.Number(
+                        value=VIDEOMAMA_SEED,
+                        label="随机种子",
+                        info="固定种子可复现结果",
+                        precision=0,
+                        visible=False,
+                    )
+                with gr.Column(scale=1, min_width=160):
+                    matting_btn = gr.Button("开始抠像", variant="primary")
+                    add_queue_btn = gr.Button("添加到队列", variant="secondary")
+            with gr.Row(equal_height=True):
+                alpha_output = gr.Video(
+                    label="Alpha 通道视频",
+                    height=300,
+                )
+                fgr_output = gr.Video(
+                    label="前景视频",
+                    height=300,
+                )
+                with gr.Column(scale=1):
+                    log_display = gr.Textbox(
+                        value=_read_processing_log,
+                        every=0.5,
+                        label="处理日志",
+                        lines=8,
+                        max_lines=20,
+                        interactive=False,
+                        autoscroll=True,
                     )
 
-        # ── Row 2: Slider + frame label ──
-        with gr.Row():
-            frame_slider = gr.Slider(
-                minimum=0, maximum=1, step=1, value=0,
-                label="帧序号",
-                info="拖动滑块可在不同帧之间切换",
-                visible=False, interactive=True,
-            )
-            frame_label = gr.Markdown("请先上传视频。")
-
-        # ── Row 3: Click controls + keyframe actions ──
-        with gr.Row():
-            point_mode = gr.Radio(
-                choices=["Positive", "Negative"],
-                value="Positive",
-                label="点击模式",
-                info="Positive 标记前景区域，Negative 标记背景区域",
-                scale=2,
-            )
-            undo_btn = gr.Button("撤销点击", scale=1)
-            clear_btn = gr.Button("清除所有点", scale=1)
-            save_kf_btn = gr.Button(
-                "保存为关键帧", variant="primary", scale=1,
-            )
-            delete_kf_btn = gr.Button("删除关键帧", scale=1)
-
-        # ── Row 4: Keyframe gallery (full width) ──
-        keyframe_info = gr.Markdown("尚未保存任何关键帧。")
-        kf_gallery = gr.Gallery(
-            label="关键帧列表",
-            columns=4,
-            object_fit="contain",
-            height=400,
-        )
-
-        # ── Row 5: SAM2 传播按钮 | 传播预览 ──
-        with gr.Row(equal_height=True):
-            propagate_btn = gr.Button(
-                "运行传播", variant="secondary", scale=1,
-            )
-            propagation_preview = gr.Video(
-                label="传播预览（右上角标注帧序号）",
-                height=400, scale=2,
-            )
-
-        # ── Row 6: 参数设置 | 开始抠像 + 添加到队列 ──
-        with gr.Row(equal_height=True):
-            with gr.Accordion("参数设置", open=True):
-                matting_engine_selector = gr.Radio(
-                    choices=["MatAnyone", "VideoMaMa"],
-                    value="MatAnyone",
-                    label="抠图引擎",
-                    info="MatAnyone 适合人物（快速），VideoMaMa 适合通用场景（需先运行传播）",
-                )
-                erode_slider = gr.Slider(
-                    minimum=0, maximum=30, step=1, value=DEFAULT_ERODE,
-                    label="腐蚀核大小",
-                    info="增大可收缩遮罩边缘，去除毛刺",
-                )
-                dilate_slider = gr.Slider(
-                    minimum=0, maximum=30, step=1, value=DEFAULT_DILATE,
-                    label="膨胀核大小",
-                    info="增大可扩展遮罩边缘，保留更多细节",
-                )
-                vm_batch_slider = gr.Slider(
-                    minimum=4, maximum=128, step=4,
-                    value=VIDEOMAMA_BATCH_SIZE,
-                    label="批次大小",
-                    info="每批推理帧数，越大越快但占用更多显存",
-                    visible=False,
-                )
-                vm_overlap_slider = gr.Slider(
-                    minimum=0, maximum=8, step=1,
-                    value=VIDEOMAMA_OVERLAP,
-                    label="重叠帧数",
-                    info="批次间重叠帧数，用于平滑过渡",
-                    visible=False,
-                )
-                vm_seed_input = gr.Number(
-                    value=VIDEOMAMA_SEED,
-                    label="随机种子",
-                    info="固定种子可复现结果",
-                    precision=0,
-                    visible=False,
-                )
-            with gr.Column(scale=1, min_width=160):
-                matting_btn = gr.Button("开始抠像", variant="primary")
-                add_queue_btn = gr.Button("添加到队列", variant="secondary")
-
-        # ── Row 6: Output videos + Processing log ──
-        with gr.Row(equal_height=True):
-            alpha_output = gr.Video(
-                label="Alpha 通道视频",
-                height=300,
-            )
-            fgr_output = gr.Video(
-                label="前景视频",
-                height=300,
-            )
-            with gr.Column(scale=1):
-                log_display = gr.Textbox(
-                    value=_read_processing_log,
-                    every=0.5,
-                    label="处理日志",
-                    lines=8,
-                    max_lines=20,
-                    interactive=False,
-                    autoscroll=True,
-                )
-
-        # ── Row 8: Task queue ──
-        queue_ui = build_queue_section()
+        # ── Step 5: 任务队列 ──
+        with gr.Accordion("Step 5: 任务队列", open=True):
+            queue_ui = build_queue_section()
 
         # ── Event wiring ──
 
@@ -266,10 +284,11 @@ def build_app() -> gr.Blocks:
             outputs=[
                 session_state, frame_display, frame_slider,
                 frame_label, keyframe_info, kf_gallery,
+                session_dropdown,
             ],
         )
 
-        frame_slider.change(
+        frame_slider.input(
             fn=on_slider_change,
             inputs=[frame_slider, session_state],
             outputs=[frame_display, session_state, frame_label],
@@ -321,6 +340,26 @@ def build_app() -> gr.Blocks:
             fn=on_run_propagation,
             inputs=[model_selector, session_state],
             outputs=[propagation_preview, session_state],
+        )
+
+        refresh_sessions_btn.click(
+            fn=on_refresh_sessions,
+            outputs=[session_dropdown],
+        )
+
+        restore_session_btn.click(
+            fn=on_restore_session,
+            inputs=[session_dropdown, session_state],
+            outputs=[
+                session_state, frame_display, frame_slider, frame_label,
+                keyframe_info, kf_gallery, video_input,
+                model_selector, text_prompt_row,
+                propagation_preview,
+                matting_engine_selector,
+                erode_slider, dilate_slider,
+                vm_batch_slider, vm_overlap_slider, vm_seed_input,
+                alpha_output, fgr_output,
+            ],
         )
 
         matting_engine_selector.change(
@@ -394,6 +433,16 @@ def build_app() -> gr.Blocks:
             api_name=False,
         )
 
+        queue_ui["clear_btn"].click(
+            fn=on_clear_queue,
+            inputs=[queue_state],
+            outputs=[
+                queue_state,
+                queue_ui["queue_status"], queue_ui["queue_table"],
+            ],
+            api_name=False,
+        )
+
         queue_ui["execute_btn"].click(
             fn=on_execute_queue,
             inputs=[queue_ui["queue_progress"], queue_state],
@@ -403,6 +452,15 @@ def build_app() -> gr.Blocks:
                 queue_ui["queue_progress"],
             ],
             api_name=False,
+        )
+
+        # Refresh session dropdown every time a client connects
+        app.load(fn=on_refresh_sessions, outputs=[session_dropdown])
+
+        # Restore queue display on page load
+        app.load(
+            fn=on_load_queue,
+            outputs=[queue_state, queue_ui["queue_status"], queue_ui["queue_table"]],
         )
 
     return app

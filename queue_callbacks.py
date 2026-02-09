@@ -1,61 +1,73 @@
-"""Callback functions for the task queue."""
+"""Callback functions for the task queue.
 
+Queue items are session_id strings persisted in workspace/queue.json.
+All task data (matting params, status) lives in each session's state.json.
+"""
+
+import json
 import logging
-import time
-from datetime import datetime, timezone
 from pathlib import Path
 
 import gradio as gr
-import numpy as np
 
 from app_callbacks import (
     _clear_processing_log,
-    _get_video_engine,
-    _run_matanyone,
-    _run_videomama,
+    _load_session,
+    _run_matting_task,
+    _save_session_state,
     empty_state,
     keyframe_display,
     keyframe_gallery,
     render_frame,
 )
-from config import WORKSPACE_DIR
-from pipeline.video_io import encode_video
-from queue_models import QueueItem, snapshot_to_queue_item
-from utils.notify import notify_failure, upload_and_notify
+from config import (
+    DEFAULT_DILATE,
+    DEFAULT_ERODE,
+    VIDEOMAMA_BATCH_SIZE,
+    VIDEOMAMA_OVERLAP,
+    VIDEOMAMA_SEED,
+    WORKSPACE_DIR,
+)
+from queue_models import load_queue, save_queue
+from utils.notify import notify_failure
 
 log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Progress helper
-# ---------------------------------------------------------------------------
-class _TaskProgress:
-    """Wrap ``gr.Progress`` to prefix descriptions with task index.
-
-    This allows sub-functions (e.g. ``_run_videomama``) that call
-    ``progress(frac, desc=...)`` to automatically include the task
-    context like ``[1/3] VideoMaMa 推理中...``.
-    """
-
-    def __init__(self, progress: gr.Progress, prefix: str):
-        self._progress = progress
-        self._prefix = prefix
-
-    def __call__(self, fraction: float, desc: str = ""):
-        full_desc = f"{self._prefix} {desc}" if desc else self._prefix
-        self._progress(fraction, desc=full_desc)
-
-
-# ---------------------------------------------------------------------------
 # Queue display helpers
 # ---------------------------------------------------------------------------
-def _queue_status_text(queue: list[QueueItem]) -> str:
+def _read_session_info(session_id: str) -> dict | None:
+    """Read meta.json + state.json for a session. Returns None on failure."""
+    session_dir = WORKSPACE_DIR / "sessions" / session_id
+    meta_path = session_dir / "meta.json"
+    state_path = session_dir / "state.json"
+    if not meta_path.exists() or not state_path.exists():
+        return None
+    try:
+        meta = json.loads(meta_path.read_text())
+        state = json.loads(state_path.read_text())
+        return {**meta, **state}
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def _queue_status_text(queue: list[str]) -> str:
     """Build a status markdown string from the queue list."""
     if not queue:
         return "队列为空。"
-    pending = sum(1 for item in queue if item.status == "pending")
-    done = sum(1 for item in queue if item.status == "done")
-    error = sum(1 for item in queue if item.status == "error")
+    pending = 0
+    done = 0
+    error = 0
+    for sid in queue:
+        info = _read_session_info(sid)
+        status = info.get("task_status", "") if info else ""
+        if status == "done":
+            done += 1
+        elif status == "error":
+            error += 1
+        else:
+            pending += 1
     parts = [f"队列中 {len(queue)} 个任务"]
     if pending:
         parts.append(f"待处理: {pending}")
@@ -66,45 +78,23 @@ def _queue_status_text(queue: list[QueueItem]) -> str:
     return " | ".join(parts)
 
 
-def _queue_table_data(queue: list[QueueItem]) -> list[list]:
+def _queue_table_data(queue: list[str]) -> list[list]:
     """Build dataframe rows from the queue list."""
     rows = []
-    for i, item in enumerate(queue, start=1):
-        video_name = item.original_filename or Path(item.source_video_path).name
-        engine_short = "MA" if item.matting_engine == "MatAnyone" else "VM"
-        rows.append([
-            i,
-            video_name,
-            item.num_frames,
-            len(item.keyframes),
-            "Yes" if item.has_propagation else "No",
-            engine_short,
-            item.status,
-        ])
+    for i, sid in enumerate(queue, start=1):
+        info = _read_session_info(sid)
+        if info is None:
+            rows.append([i, sid, 0, 0, "No", "-", "丢失"])
+            continue
+        video_name = info.get("original_filename", sid)
+        num_frames = info.get("num_frames", 0)
+        kf_indices = info.get("keyframe_indices", [])
+        has_prop = "Yes" if info.get("has_propagation") else "No"
+        engine = info.get("matting_engine", "MatAnyone")
+        engine_short = "MA" if engine == "MatAnyone" else "VM"
+        status = info.get("task_status", "pending")
+        rows.append([i, video_name, num_frames, len(kf_indices), has_prop, engine_short, status])
     return rows
-
-
-def _item_to_state_dict(item: QueueItem) -> dict:
-    """Convert a QueueItem back to a state dict for matting functions.
-
-    The returned dict contains the fields that ``_run_matanyone``,
-    ``_run_videomama``, and ``upload_and_notify`` read from state.
-    """
-    return {
-        "session_id": item.session_id,
-        "source_video_path": item.source_video_path,
-        "frames_dir": item.frames_dir,
-        "num_frames": item.num_frames,
-        "fps": item.fps,
-        "video_width": item.video_width,
-        "video_height": item.video_height,
-        "video_duration": item.video_duration,
-        "video_file_size": item.video_file_size,
-        "video_format": item.video_format,
-        "keyframes": item.keyframes,
-        "propagated_masks": item.propagated_masks,
-        "model_type": item.model_type,
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -118,9 +108,9 @@ def on_add_to_queue(
     overlap: int,
     seed: int,
     session_state: dict,
-    queue_state: list[QueueItem],
+    queue_state: list[str],
 ):
-    """Snapshot the current session into a queue item, then reset the UI.
+    """Save matting params to session, add session_id to queue, reset UI.
 
     Returns:
         Tuple of 13 values: session_state, queue_state, queue_status,
@@ -130,113 +120,115 @@ def on_add_to_queue(
     """
     if not session_state.get("keyframes"):
         gr.Warning("请至少保存一个关键帧后再添加到队列。")
+        queue = load_queue()
         return (
-            session_state, queue_state,
-            _queue_status_text(queue_state),
-            _queue_table_data(queue_state),
+            session_state, queue,
+            _queue_status_text(queue),
+            _queue_table_data(queue),
             gr.update(), gr.update(), gr.update(),
             gr.update(), gr.update(), gr.update(),
             gr.update(), gr.update(), gr.update(),
         )
 
-    item = snapshot_to_queue_item(
-        session_state, matting_engine,
-        int(erode), int(dilate), int(batch_size), int(overlap), int(seed),
+    # Write matting params + pending status into session state
+    session_state["matting_engine"] = matting_engine
+    session_state["erode"] = int(erode)
+    session_state["dilate"] = int(dilate)
+    session_state["batch_size"] = int(batch_size)
+    session_state["overlap"] = int(overlap)
+    session_state["seed"] = int(seed)
+    session_state["task_status"] = "pending"
+    session_state["error_msg"] = ""
+    _save_session_state(session_state)
+
+    # Add to queue (dedup by session_id)
+    queue = load_queue()
+    sid = session_state["session_id"]
+    if sid not in queue:
+        queue.append(sid)
+    save_queue(queue)
+
+    log.info(
+        "Added to queue: session=%s, video=%s, keyframes=%d, engine=%s",
+        sid,
+        session_state.get("original_filename", ""),
+        len(session_state["keyframes"]),
+        matting_engine,
     )
-
-    editing_id = session_state.get("_editing_item_id")
-    if editing_id and any(q.item_id == editing_id for q in queue_state):
-        # Overwrite existing queue item
-        queue_state = [item if q.item_id == editing_id else q for q in queue_state]
-        log.info(
-            "Updated queue item %s: video=%s, keyframes=%d, engine=%s",
-            editing_id,
-            item.original_filename or Path(item.source_video_path).name,
-            len(item.keyframes),
-            item.matting_engine,
-        )
-    else:
-        queue_state = [*queue_state, item]
-        log.info(
-            "Added to queue: session=%s, video=%s, keyframes=%d, engine=%s",
-            item.session_id,
-            item.original_filename or Path(item.source_video_path).name,
-            len(item.keyframes),
-            item.matting_engine,
-        )
 
     # Reset session state and all annotation UI components
     new_state = empty_state()
     return (
         new_state,
-        queue_state,
-        _queue_status_text(queue_state),
-        _queue_table_data(queue_state),
-        # frame_display
+        queue,
+        _queue_status_text(queue),
+        _queue_table_data(queue),
         None,
-        # frame_slider
         gr.update(value=0, visible=False),
-        # frame_label
         gr.update(value="请先上传视频。"),
-        # keyframe_info
         "尚未保存任何关键帧。",
-        # kf_gallery
         [],
-        # video_input
         None,
-        # propagation_preview
         None,
-        # alpha_output
         None,
-        # fgr_output
         None,
     )
 
 
 def on_remove_from_queue(
     remove_idx: int,
-    queue_state: list[QueueItem],
+    queue_state: list[str],
 ):
     """Remove a queue item by 1-based index.
 
     Returns:
         Tuple of (queue_state, queue_status, queue_table).
     """
+    queue = load_queue()
     idx = int(remove_idx) - 1
-    if idx < 0 or idx >= len(queue_state):
-        gr.Warning(f"无效序号: {int(remove_idx)}，队列共 {len(queue_state)} 项。")
+    if idx < 0 or idx >= len(queue):
+        gr.Warning(f"无效序号: {int(remove_idx)}，队列共 {len(queue)} 项。")
         return (
-            queue_state,
-            _queue_status_text(queue_state),
-            _queue_table_data(queue_state),
+            queue,
+            _queue_status_text(queue),
+            _queue_table_data(queue),
         )
 
-    removed = queue_state[idx]
-    queue_state = [*queue_state[:idx], *queue_state[idx + 1:]]
-    log.info("Removed from queue: session=%s", removed.session_id)
+    removed_sid = queue[idx]
+    queue = [*queue[:idx], *queue[idx + 1:]]
+    save_queue(queue)
+    log.info("Removed from queue: session=%s", removed_sid)
     return (
-        queue_state,
-        _queue_status_text(queue_state),
-        _queue_table_data(queue_state),
+        queue,
+        _queue_status_text(queue),
+        _queue_table_data(queue),
+    )
+
+
+def on_clear_queue(queue_state: list[str]):
+    """Clear all items from the queue.
+
+    Returns:
+        Tuple of (queue_state, queue_status, queue_table).
+    """
+    save_queue([])
+    log.info("Queue cleared")
+    return (
+        [],
+        _queue_status_text([]),
+        _queue_table_data([]),
     )
 
 
 def on_restore_from_queue(
     restore_idx: int,
     session_state: dict,
-    queue_state: list[QueueItem],
+    queue_state: list[str],
 ):
     """Restore a queue item into the editing area for modification.
 
-    Reconstructs the full session state from the queue item so the user
-    can edit keyframes, re-run propagation, change parameters, etc.
-    When the user clicks "添加到队列" afterwards, the original queue
-    item is overwritten with the updated data.
-
-    Args:
-        restore_idx: 1-based index of the item to restore.
-        session_state: Current session state (will be replaced).
-        queue_state: Current queue list.
+    Loads the full session state from disk so the user can edit
+    keyframes, re-run propagation, change parameters, etc.
 
     Returns:
         Tuple of 21 values covering all editable UI components.
@@ -253,236 +245,145 @@ def on_restore_from_queue(
         gr.update(), gr.update(), gr.update(),
     )
 
+    queue = load_queue()
     idx = int(restore_idx) - 1
-    if idx < 0 or idx >= len(queue_state):
-        gr.Warning(f"无效序号: {int(restore_idx)}，队列共 {len(queue_state)} 项。")
+    if idx < 0 or idx >= len(queue):
+        gr.Warning(f"无效序号: {int(restore_idx)}，队列共 {len(queue)} 项。")
         return no_update
 
-    item = queue_state[idx]
+    sid = queue[idx]
+    loaded = _load_session(sid)
+    if loaded is None:
+        gr.Warning(f"无法加载 Session: {sid}")
+        return no_update
 
-    if not item.frames_dir or not Path(item.frames_dir).exists():
+    frames_dir = loaded["frames_dir"]
+    if not Path(frames_dir).exists():
         gr.Warning("帧数据目录不存在，无法恢复编辑。")
         return no_update
 
-    # Reconstruct session state from queue item
-    state = empty_state()
-    state["session_id"] = item.session_id
-    state["frames_dir"] = item.frames_dir
-    state["num_frames"] = item.num_frames
-    state["fps"] = item.fps
-    state["source_video_path"] = item.source_video_path
-    state["original_filename"] = item.original_filename
-    state["video_file_size"] = item.video_file_size
-    state["video_format"] = item.video_format
-    state["video_duration"] = item.video_duration
-    state["video_width"] = item.video_width
-    state["video_height"] = item.video_height
-    state["model_type"] = item.model_type
-    state["keyframes"] = {k: v.copy() for k, v in item.keyframes.items()}
-    state["propagated_masks"] = {
-        k: v.copy() for k, v in item.propagated_masks.items()
-    }
-    # Mark for overwrite on next "添加到队列"
-    state["_editing_item_id"] = item.item_id
-
     # Navigate to first keyframe
-    first_kf = min(item.keyframes.keys()) if item.keyframes else 0
-    state["current_frame_idx"] = first_kf
-    state["current_mask"] = state["keyframes"].get(first_kf)
+    first_kf = min(loaded["keyframes"].keys()) if loaded["keyframes"] else 0
+    loaded["current_frame_idx"] = first_kf
+    loaded["current_mask"] = loaded["keyframes"].get(first_kf)
 
-    frame = render_frame(state)
-    gallery = keyframe_gallery(state)
-    kf_info = keyframe_display(state)
+    frame = render_frame(loaded)
+    gallery = keyframe_gallery(loaded)
+    kf_info = keyframe_display(loaded)
 
     # Check for existing propagation preview
-    session_dir = WORKSPACE_DIR / "sessions" / item.session_id
+    session_dir = WORKSPACE_DIR / "sessions" / sid
     preview_path = session_dir / "propagation_preview.mp4"
     prop_preview = str(preview_path) if preview_path.exists() else None
 
-    # Parameter visibility based on matting engine
-    is_ma = item.matting_engine == "MatAnyone"
-
-    log.info(
-        "Restored queue item for editing: session=%s, item_id=%s",
-        item.session_id, item.item_id,
-    )
-
-    return (
-        state,
-        queue_state,
-        _queue_status_text(queue_state),
-        _queue_table_data(queue_state),
-        # frame_display
-        frame,
-        # frame_slider
-        gr.update(
-            minimum=0, maximum=item.num_frames - 1,
-            value=first_kf, visible=True, interactive=True,
-        ),
-        # frame_label
-        f"第 {first_kf} 帧 / 共 {item.num_frames - 1} 帧",
-        # keyframe_info
-        kf_info,
-        # kf_gallery
-        gallery,
-        # video_input
-        str(item.source_video_path),
-        # model_selector
-        gr.update(value=item.model_type),
-        # text_prompt_row
-        gr.update(visible=(item.model_type == "SAM3")),
-        # matting_engine_selector
-        gr.update(value=item.matting_engine),
-        # erode_slider, dilate_slider
-        gr.update(value=item.erode, visible=is_ma),
-        gr.update(value=item.dilate, visible=is_ma),
-        # vm_batch_slider, vm_overlap_slider, vm_seed_input
-        gr.update(value=item.batch_size, visible=not is_ma),
-        gr.update(value=item.overlap, visible=not is_ma),
-        gr.update(value=item.seed, visible=not is_ma),
-        # propagation_preview
-        prop_preview,
-        # alpha_output
-        None,
-        # fgr_output
-        None,
-    )
-
-
-def _execute_single_item(
-    item: QueueItem,
-    progress: gr.Progress,
-    task_idx: int,
-    total_tasks: int,
-) -> float:
-    """Execute matting for a single queue item with progress tracking.
-
-    Args:
-        item: The queue item to process.
-        progress: Gradio progress tracker.
-        task_idx: 1-based index of this task in the batch.
-        total_tasks: Total number of tasks in the batch.
-
-    Returns:
-        Processing time in seconds.
-    """
-    prefix = f"[{task_idx}/{total_tasks}]"
-    tp = _TaskProgress(progress, prefix)
-    state = _item_to_state_dict(item)
-
-    # Phase 1: Auto-propagate if needed
-    if not item.has_propagation:
-        log.info("自动运行 %s 传播 (session=%s)...", item.model_type, item.session_id)
-        tp(0, "传播中...")
-        engine = _get_video_engine(item.model_type)
-        propagated = engine.propagate(
-            frames_dir=item.frames_dir,
-            keyframe_masks=item.keyframes,
-            progress_callback=lambda f: tp(f, "传播中..."),
-        )
-        item.propagated_masks = propagated
-        item.has_propagation = True
-        state["propagated_masks"] = propagated
-
-    # Phase 2: Run matting
-    start_ts = time.time()
-    start_dt = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-
-    tp(0, f"{item.matting_engine} 推理中...")
-
-    if item.matting_engine == "VideoMaMa":
-        alphas, foregrounds = _run_videomama(
-            state, item.batch_size, item.overlap, item.seed, tp,
-        )
-    else:
-        alphas, foregrounds = _run_matanyone(state, item.erode, item.dilate, tp)
-
-    # Phase 3: Encode output videos
-    tp(0, "编码视频...")
-    session_dir = WORKSPACE_DIR / "sessions" / item.session_id
+    # Check for existing matting output videos
     alpha_path = session_dir / "alpha.mp4"
     fgr_path = session_dir / "foreground.mp4"
+    alpha_video = str(alpha_path) if alpha_path.exists() else None
+    fgr_video = str(fgr_path) if fgr_path.exists() else None
 
-    log.info("编码视频 (session=%s)...", item.session_id)
-    alpha_rgb = np.repeat(alphas, 3, axis=3)
-    encode_video(alpha_rgb, alpha_path, item.fps)
-    encode_video(foregrounds, fgr_path, item.fps)
+    # Parameter visibility based on matting engine
+    is_ma = loaded.get("matting_engine", "MatAnyone") == "MatAnyone"
 
-    end_ts = time.time()
-    end_dt = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    processing_time = end_ts - start_ts
+    log.info("Restored queue item for editing: session=%s", sid)
 
-    # Phase 4: Upload and notify
-    tp(0, "上传至 R2...")
-    log.info("上传至 R2 (session=%s)...", item.session_id)
-    try:
-        upload_and_notify(
-            state, item.erode, item.dilate, session_dir,
-            processing_time, start_dt, end_dt,
-        )
-    except Exception:
-        log.exception("Post-matting upload/notify failed for session=%s", item.session_id)
-
-    tp(1.0, "完成")
-    log.info("任务完成 (session=%s, %.1fs)", item.session_id, processing_time)
-    return processing_time
+    return (
+        loaded,
+        queue,
+        _queue_status_text(queue),
+        _queue_table_data(queue),
+        frame,
+        gr.update(
+            minimum=0, maximum=loaded["num_frames"] - 1,
+            value=first_kf, visible=True, interactive=True,
+        ),
+        f"第 {first_kf} 帧 / 共 {loaded['num_frames'] - 1} 帧",
+        kf_info,
+        gallery,
+        str(loaded["source_video_path"]) if loaded["source_video_path"] else None,
+        gr.update(value=loaded["model_type"]),
+        gr.update(visible=(loaded["model_type"] == "SAM3")),
+        gr.update(value=loaded.get("matting_engine", "MatAnyone")),
+        gr.update(value=loaded.get("erode", DEFAULT_ERODE), visible=is_ma),
+        gr.update(value=loaded.get("dilate", DEFAULT_DILATE), visible=is_ma),
+        gr.update(value=loaded.get("batch_size", VIDEOMAMA_BATCH_SIZE), visible=not is_ma),
+        gr.update(value=loaded.get("overlap", VIDEOMAMA_OVERLAP), visible=not is_ma),
+        gr.update(value=loaded.get("seed", VIDEOMAMA_SEED), visible=not is_ma),
+        prop_preview,
+        alpha_video,
+        fgr_video,
+    )
 
 
 def on_execute_queue(
     _queue_progress: str,
-    queue_state: list[QueueItem],
+    queue_state: list[str],
     progress=gr.Progress(track_tqdm=True),
 ):
     """Execute all pending queue items sequentially.
 
-    Real-time progress is shown via ``gr.Progress`` (progress bar) and
-    tqdm interception (``track_tqdm=True``).  The queue table and
-    summary markdown are updated once at the end.
-
-    Note: ``_queue_progress`` is an unused visible-component input
-    required to work around a Gradio 6 issue where event handlers
-    with only ``gr.State`` inputs receive no data from the frontend.
+    Reads the latest queue from disk, loads each session, and runs
+    the shared matting pipeline. Status is written back to state.json.
 
     Returns:
         Tuple of (queue_state, queue_status, queue_table, queue_progress).
     """
-    pending = [item for item in queue_state if item.status == "pending"]
-    if not pending:
+    queue = load_queue()
+
+    # Filter to pending sessions
+    pending_sids: list[str] = []
+    for sid in queue:
+        info = _read_session_info(sid)
+        status = info.get("task_status", "") if info else ""
+        if status in ("pending", ""):
+            pending_sids.append(sid)
+
+    if not pending_sids:
         gr.Warning("队列中没有待处理的任务。")
         return (
-            queue_state,
-            _queue_status_text(queue_state),
-            _queue_table_data(queue_state),
+            queue,
+            _queue_status_text(queue),
+            _queue_table_data(queue),
             "没有待处理的任务。",
         )
 
     _clear_processing_log()
-    total = len(pending)
+    total = len(pending_sids)
     log.info("========== 开始执行队列 (%d 个任务) ==========", total)
 
     done_count = 0
     error_count = 0
     timings: list[str] = []
 
-    for i, item in enumerate(pending, start=1):
-        video_name = item.original_filename or Path(item.source_video_path).name
-        log.info(
-            "--- 任务 %d/%d: session=%s, video=%s ---",
-            i, total, item.session_id, video_name,
-        )
-        item.status = "processing"
+    for i, sid in enumerate(pending_sids, start=1):
+        loaded = _load_session(sid)
+        if loaded is None:
+            log.warning("Cannot load session %s, skipping", sid)
+            timings.append(f"{sid}: 加载失败")
+            error_count += 1
+            continue
+
+        video_name = loaded.get("original_filename", sid)
+        log.info("--- 任务 %d/%d: session=%s, video=%s ---", i, total, sid, video_name)
+
+        loaded["task_status"] = "processing"
+        loaded["error_msg"] = ""
+        _save_session_state(loaded)
 
         try:
-            elapsed = _execute_single_item(item, progress, i, total)
-            item.status = "done"
+            prefix = f"[{i}/{total}]"
+            _, _, elapsed = _run_matting_task(loaded, progress, prefix)
+            loaded["task_status"] = "done"
+            _save_session_state(loaded)
             done_count += 1
             timings.append(f"{video_name}: {elapsed:.1f}s")
         except Exception as exc:
-            item.status = "error"
-            item.error_msg = str(exc)
+            loaded["task_status"] = "error"
+            loaded["error_msg"] = str(exc)
+            _save_session_state(loaded)
             error_count += 1
-            log.exception("任务失败 (session=%s): %s", item.session_id, exc)
-            notify_failure(item.session_id, exc)
+            log.exception("任务失败 (session=%s): %s", sid, exc)
+            notify_failure(sid, exc)
             timings.append(f"{video_name}: 失败")
 
     # Final summary
@@ -495,9 +396,21 @@ def on_execute_queue(
 
     log.info("========== 队列执行完毕: %d 成功, %d 失败 ==========", done_count, error_count)
 
+    # Re-read queue from disk for latest state
+    queue = load_queue()
     return (
-        list(queue_state),
-        _queue_status_text(queue_state),
-        _queue_table_data(queue_state),
+        queue,
+        _queue_status_text(queue),
+        _queue_table_data(queue),
         summary,
     )
+
+
+def on_load_queue():
+    """Restore queue display on page load.
+
+    Returns:
+        Tuple of (queue_state, queue_status, queue_table).
+    """
+    queue = load_queue()
+    return queue, _queue_status_text(queue), _queue_table_data(queue)

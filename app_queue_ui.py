@@ -25,6 +25,7 @@ def build_queue_section() -> dict:
         with gr.Column(scale=1):
             restore_btn = gr.Button("恢复编辑")
             remove_btn = gr.Button("移除")
+            clear_btn = gr.Button("清空队列", variant="stop")
     execute_btn = gr.Button("执行队列", variant="primary")
     queue_progress = gr.Markdown("")
 
@@ -34,6 +35,7 @@ def build_queue_section() -> dict:
         "remove_idx": remove_idx,
         "restore_btn": restore_btn,
         "remove_btn": remove_btn,
+        "clear_btn": clear_btn,
         "execute_btn": execute_btn,
         "queue_progress": queue_progress,
     }

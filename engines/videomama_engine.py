@@ -385,6 +385,9 @@ class VideoMaMaEngine:
             )
         video_tensor = torch.cat(decoded_chunks, dim=0)
         del pred_latents, decoded_chunks
+        # Float16 on MPS may produce sporadic NaN; replace with 0
+        # (maps to transparent in alpha) before clamping.
+        video_tensor = torch.nan_to_num(video_tensor, nan=0.0)
         video_tensor = (
             (video_tensor / 2.0 + 0.5).clamp(0, 1)
             .mean(dim=1, keepdim=True)
