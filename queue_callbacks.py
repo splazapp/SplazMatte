@@ -413,6 +413,31 @@ def on_pack_download(queue_state: list[str]):
     return gr.update(value=str(zip_path))
 
 
+def on_reset_status(queue_state: list[str]):
+    """Reset all queue tasks to pending status.
+
+    Returns:
+        Tuple of (queue_state, queue_status, queue_table).
+    """
+    queue = load_queue()
+    if not queue:
+        gr.Warning("队列为空。")
+        return queue, _queue_status_text(queue), _queue_table_data(queue)
+
+    count = 0
+    for sid in queue:
+        loaded = load_session(sid)
+        if loaded is None:
+            continue
+        loaded["task_status"] = "pending"
+        loaded["error_msg"] = ""
+        save_session_state(loaded)
+        count += 1
+
+    gr.Info(f"已重置 {count} 个任务为待处理状态。")
+    return queue, _queue_status_text(queue), _queue_table_data(queue)
+
+
 def on_send_feishu(queue_state: list[str]):
     """Send Feishu notification for each completed task in the queue.
 

@@ -49,6 +49,7 @@ from queue_callbacks import (
     on_load_queue,
     on_pack_download,
     on_remove_from_queue,
+    on_reset_status,
     on_restore_from_queue,
     on_send_feishu,
 )
@@ -433,6 +434,16 @@ def build_app() -> gr.Blocks:
 
         queue_ui["clear_btn"].click(
             fn=on_clear_queue,
+            inputs=[queue_state],
+            outputs=[
+                queue_state,
+                queue_ui["queue_status"], queue_ui["queue_table"],
+            ],
+            api_name=False,
+        )
+
+        queue_ui["reset_status_btn"].click(
+            fn=on_reset_status,
             inputs=[queue_state],
             outputs=[
                 queue_state,
