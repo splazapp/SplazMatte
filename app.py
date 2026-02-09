@@ -125,7 +125,7 @@ def build_app() -> gr.Blocks:
                 with gr.Column(scale=2):
                     video_input = gr.Video(
                         label="上传视频",
-                        height=300,
+                        height=390,
                     )
                 with gr.Column(scale=1):
                     session_dropdown = gr.Dropdown(
