@@ -27,10 +27,10 @@ def build_queue_section() -> dict:
             restore_btn = gr.Button("恢复编辑")
             remove_btn = gr.Button("移除")
             clear_btn = gr.Button("清空队列", variant="stop")
+            execute_btn = gr.Button("执行队列", variant="primary")
+            feishu_btn = gr.Button("发送飞书通知")
             download_btn = gr.Button("打包下载")
             download_file = gr.File(label="下载结果", interactive=False)
-            feishu_btn = gr.Button("发送飞书通知")
-    execute_btn = gr.Button("执行队列", variant="primary")
     queue_progress = gr.Markdown("")
 
     return {
