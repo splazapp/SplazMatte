@@ -477,6 +477,7 @@ def build_app() -> gr.Blocks:
             inputs=[],
             outputs=[],
             api_name=False,
+            concurrency_limit=None,
         )
 
         queue_ui["download_btn"].click(

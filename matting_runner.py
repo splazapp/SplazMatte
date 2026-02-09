@@ -9,6 +9,7 @@ argument is a fraction (0.0–1.0), the second is a description string.
 
 import json
 import logging
+import threading
 import time
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -36,21 +37,19 @@ log = logging.getLogger(__name__)
 ProgressCallback = Callable[[float, str], None] | None
 
 # ---------------------------------------------------------------------------
-# Queue cancellation flag
+# Queue cancellation signal (thread-safe)
 # ---------------------------------------------------------------------------
-_queue_cancel_requested = False
+_cancel_event = threading.Event()
 
 
 def request_queue_cancel():
     """Signal the running queue to stop after the current task finishes."""
-    global _queue_cancel_requested
-    _queue_cancel_requested = True
+    _cancel_event.set()
 
 
 def reset_queue_cancel():
     """Clear the cancellation flag (called at queue execution start)."""
-    global _queue_cancel_requested
-    _queue_cancel_requested = False
+    _cancel_event.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -386,7 +385,7 @@ def execute_queue(
     timings: list[str] = []
 
     for i, sid in enumerate(pending_sids, start=1):
-        if _queue_cancel_requested:
+        if _cancel_event.is_set():
             log.info("用户取消了队列执行")
             break
         loaded = load_session(sid)
