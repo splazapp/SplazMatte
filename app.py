@@ -403,17 +403,14 @@ if __name__ == "__main__":
     log = logging.getLogger(__name__)
     app = build_app()
     app.queue()
-    log.info("Launching Gradio (share=True, port=%s)...", GRADIO_SERVER_PORT)
-    _, local_url, share_url = app.launch(
+    log.info("Launching Gradio (port=%s)...", GRADIO_SERVER_PORT)
+    _, local_url, _ = app.launch(
         server_name="0.0.0.0",
         server_port=GRADIO_SERVER_PORT,
-        share=True,
+        share=False,
         theme=gr.themes.Soft(),
         prevent_thread_lock=True,
     )
-    log.info("Gradio launched — local=%s, share=%s", local_url, share_url)
-    if share_url:
-        send_feishu_startup(share_url, local_url)
-    else:
-        log.warning("No share URL returned, skipping Feishu notification")
+    log.info("Gradio launched — local=%s", local_url)
+    send_feishu_startup(local_url)
     app.block_thread()

@@ -2,8 +2,8 @@
 
 import logging
 import platform
+import socket
 import traceback
-from datetime import datetime, timedelta, timezone
 
 import requests
 
@@ -12,6 +12,18 @@ from config import FEISHU_WEBHOOK_URL, get_device
 log = logging.getLogger(__name__)
 
 MAX_STACKTRACE_LEN = 2000
+
+
+def _lan_ip() -> str:
+    """Detect the LAN IP address via UDP socket routing (no data sent)."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
 
 
 def _device_info() -> str:
@@ -53,15 +65,11 @@ def _format_duration(seconds: float) -> str:
     return f"{seconds:.1f}s"
 
 
-def send_feishu_startup(share_url: str, local_url: str) -> None:
-    """Send a startup notification with the Gradio share URL."""
-    cst = timezone(timedelta(hours=8))
-    expires_at = datetime.now(cst) + timedelta(hours=72)
-    expires_str = expires_at.strftime("%m/%d %H:%M")
+def send_feishu_startup(local_url: str) -> None:
+    """Send a startup notification with the LAN URL."""
+    lan_url = local_url.replace("0.0.0.0", _lan_ip()).replace("127.0.0.1", _lan_ip())
     content_md = (
-        f"**公网链接**: [{share_url}]({share_url})\n"
-        f"**有效期至**: {expires_str}（72小时）\n"
-        f"**本地链接**: {local_url}\n"
+        f"**局域网链接**: [{lan_url}]({lan_url})\n"
         f"**设备**: {_device_info()}"
     )
     card = {
