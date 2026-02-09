@@ -96,7 +96,7 @@ def _get_image_engine(model_type: str):
 def _make_session_id(video_filename: str) -> str:
     """Generate a human-readable session ID from the video filename.
 
-    Format: ``{yyyyMMddHHMMSS}_{sanitized_name}``.  The second-level
+    Format: ``{yyyyMMdd_hhmmss}_{sanitized_name}``.  The second-level
     precision makes a numeric suffix unnecessary.
 
     Args:
@@ -105,7 +105,7 @@ def _make_session_id(video_filename: str) -> str:
     Returns:
         A unique, filesystem/URL-safe session ID.
     """
-    date_prefix = datetime.now().strftime("%Y%m%d%H%M%S")
+    date_prefix = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     stem = Path(video_filename).stem
     stem = unicodedata.normalize("NFKC", stem)
