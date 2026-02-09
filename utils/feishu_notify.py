@@ -3,6 +3,7 @@
 import logging
 import platform
 import traceback
+from datetime import datetime, timedelta, timezone
 
 import requests
 
@@ -50,6 +51,29 @@ def _format_duration(seconds: float) -> str:
         m, s = divmod(int(seconds), 60)
         return f"{m}m {s}s"
     return f"{seconds:.1f}s"
+
+
+def send_feishu_startup(share_url: str, local_url: str) -> None:
+    """Send a startup notification with the Gradio share URL."""
+    cst = timezone(timedelta(hours=8))
+    expires_at = datetime.now(cst) + timedelta(hours=72)
+    expires_str = expires_at.strftime("%m/%d %H:%M")
+    content_md = (
+        f"**公网链接**: [{share_url}]({share_url})\n"
+        f"**有效期至**: {expires_str}（72小时）\n"
+        f"**本地链接**: {local_url}\n"
+        f"**设备**: {_device_info()}"
+    )
+    card = {
+        "header": {
+            "title": {"tag": "plain_text", "content": "SplazMatte 已启动 🚀"},
+            "template": "blue",
+        },
+        "elements": [
+            {"tag": "markdown", "content": content_md},
+        ],
+    }
+    _post_card(card)
 
 
 def send_feishu_success(

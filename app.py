@@ -40,6 +40,7 @@ from app_callbacks import (
     on_upload,
 )
 from app_queue_ui import build_queue_section
+from utils.feishu_notify import send_feishu_startup
 from queue_callbacks import (
     on_add_to_queue,
     on_execute_queue,
@@ -399,6 +400,20 @@ def build_app() -> gr.Blocks:
 
 
 if __name__ == "__main__":
+    log = logging.getLogger(__name__)
     app = build_app()
     app.queue()
-    app.launch(server_name="0.0.0.0", server_port=GRADIO_SERVER_PORT, share=True, theme=gr.themes.Soft())
+    log.info("Launching Gradio (share=True, port=%s)...", GRADIO_SERVER_PORT)
+    _, local_url, share_url = app.launch(
+        server_name="0.0.0.0",
+        server_port=GRADIO_SERVER_PORT,
+        share=True,
+        theme=gr.themes.Soft(),
+        prevent_thread_lock=True,
+    )
+    log.info("Gradio launched — local=%s, share=%s", local_url, share_url)
+    if share_url:
+        send_feishu_startup(share_url, local_url)
+    else:
+        log.warning("No share URL returned, skipping Feishu notification")
+    app.block_thread()
