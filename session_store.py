@@ -96,6 +96,9 @@ def save_session_state(state: dict) -> None:
         "seed": state.get("seed", VIDEOMAMA_SEED),
         "task_status": state.get("task_status", ""),
         "error_msg": state.get("error_msg", ""),
+        "processing_time": state.get("processing_time", 0.0),
+        "start_time": state.get("start_time", ""),
+        "end_time": state.get("end_time", ""),
     }
     (session_dir / "state.json").write_text(
         json.dumps(data, ensure_ascii=False, indent=2),
