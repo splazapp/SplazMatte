@@ -385,7 +385,7 @@ def execute_queue(
         save_session_state(loaded)
 
         try:
-            prefix = f"[{i}/{total}]"
+            prefix = f"[{i}/{total}] {sid}"
             _, _, elapsed = run_matting_task(loaded, progress_callback, prefix)
             loaded["task_status"] = "done"
             save_session_state(loaded)
