@@ -6,9 +6,6 @@ os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 # Prevent system proxies (Clash, V2Ray, etc.) from intercepting Gradio's local self-check.
 os.environ.setdefault("no_proxy", "localhost,127.0.0.1,0.0.0.0")
 
-from dotenv import load_dotenv
-load_dotenv()
-
 import logging
 import platform
 from logging.handlers import RotatingFileHandler

@@ -41,6 +41,10 @@ def _make_progress_callback():
 
         def callback(frac: float, desc: str = ""):
             pct = frac * 100
+            # Detect phase reset (e.g. propagation → matting)
+            if pct < last_pct[0] - 5:
+                bar.reset()
+                last_pct[0] = 0.0
             delta = pct - last_pct[0]
             if delta > 0:
                 bar.update(delta)

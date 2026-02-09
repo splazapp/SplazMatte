@@ -125,11 +125,8 @@ class VideoMaMaEngine:
         prev_tail: list[np.ndarray] | None = None
         batches_done = 0
 
-        # Count total batches for progress
-        if num_frames <= batch_size:
-            total_batches = 1
-        else:
-            total_batches = 1 + (num_frames - batch_size + stride - 1) // stride
+        # Count total batches for progress (ceiling division)
+        total_batches = max(1, -(-num_frames // stride))
 
         start = 0
         while start < num_frames:
@@ -400,7 +397,7 @@ class VideoMaMaEngine:
 
         # --- 10. To PIL → resize → alpha ---
         # Move to CPU and free device memory before PIL conversion
-        video_tensor = video_tensor.cpu()
+        video_tensor = video_tensor.cpu().float()
         if is_mps:
             torch.mps.empty_cache()
 

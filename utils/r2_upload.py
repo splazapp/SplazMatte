@@ -48,8 +48,12 @@ def upload_session_to_r2(
 
     Returns:
         Mapping of ``{filename: cdn_url}`` for every successfully uploaded
-        file.
+        file.  Returns empty dict when R2 is not configured.
     """
+    if not R2_ENDPOINT:
+        log.warning("R2 not configured (SPLAZMATTE_R2_ENDPOINT is empty), skipping upload.")
+        return {}
+
     client = _build_client()
     cdn_urls: dict[str, str] = {}
 

@@ -3,6 +3,9 @@
 import os
 from pathlib import Path
 
+from dotenv import load_dotenv
+load_dotenv()
+
 # Enable MPS CPU fallback for ops not yet implemented on Apple Silicon.
 # Must be set before torch initialises its MPS backend (static cache).
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
