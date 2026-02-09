@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import logging
+from logging.handlers import RotatingFileHandler
 
 import gradio as gr
 
@@ -17,6 +18,7 @@ from config import (
     DEFAULT_DILATE,
     DEFAULT_ERODE,
     GRADIO_SERVER_PORT,
+    LOGS_DIR,
     PROCESSING_LOG_FILE,
     VIDEOMAMA_BATCH_SIZE,
     VIDEOMAMA_OVERLAP,
@@ -60,6 +62,28 @@ _file_handler.setFormatter(logging.Formatter(
 ))
 logging.getLogger().addHandler(_file_handler)
 logging.getLogger(__name__).info("SplazMatte 已启动，等待操作...")
+
+# --- logs/ 持久日志 ---
+LOGS_DIR.mkdir(parents=True, exist_ok=True)
+_persistent_fmt = logging.Formatter(
+    "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+
+_persistent_handler = RotatingFileHandler(
+    str(LOGS_DIR / "splazmatte.log"),
+    maxBytes=5_000_000, backupCount=5, encoding="utf-8",
+)
+_persistent_handler.setFormatter(_persistent_fmt)
+logging.getLogger().addHandler(_persistent_handler)
+
+_error_handler = RotatingFileHandler(
+    str(LOGS_DIR / "errors.log"),
+    maxBytes=2_000_000, backupCount=3, encoding="utf-8",
+)
+_error_handler.setLevel(logging.ERROR)
+_error_handler.setFormatter(_persistent_fmt)
+logging.getLogger().addHandler(_error_handler)
 
 
 def _read_processing_log() -> str:

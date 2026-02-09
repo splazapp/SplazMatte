@@ -12,6 +12,7 @@ import torch  # noqa: E402
 PROJECT_ROOT = Path(__file__).resolve().parent
 MODELS_DIR = PROJECT_ROOT / "models"
 WORKSPACE_DIR = PROJECT_ROOT / "workspace"
+LOGS_DIR = PROJECT_ROOT / "logs"
 SDKS_DIR = PROJECT_ROOT / "sdks"
 
 # SAM2.1 (image predictor for mask annotation)
