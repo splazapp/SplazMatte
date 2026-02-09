@@ -353,8 +353,7 @@ def on_execute_queue(
     then updates Gradio UI components with results.
 
     Returns:
-        Tuple of (queue_state, queue_status, queue_table, queue_progress,
-        download_file).
+        Tuple of (queue_state, queue_status, queue_table, queue_progress).
     """
     queue = load_queue()
 
@@ -371,7 +370,6 @@ def on_execute_queue(
             _queue_status_text(queue),
             _queue_table_data(queue),
             "没有待处理的任务。",
-            gr.update(value=None),
         )
 
     _clear_processing_log()
@@ -392,17 +390,26 @@ def on_execute_queue(
     # Re-read queue from disk for latest state
     queue = load_queue()
 
-    # Pack results zip
-    zip_path = _pack_results_zip(queue)
-    download_update = gr.update(value=str(zip_path) if zip_path else None)
-
     return (
         queue,
         _queue_status_text(queue),
         _queue_table_data(queue),
         summary,
-        download_update,
     )
+
+
+def on_pack_download(queue_state: list[str]):
+    """Pack results zip on demand when user clicks the download button.
+
+    Returns:
+        gr.update for the download_file component.
+    """
+    queue = load_queue()
+    zip_path = _pack_results_zip(queue)
+    if zip_path is None:
+        gr.Warning("没有可打包的结果（队列中无已完成的任务）。")
+        return gr.update(value=None)
+    return gr.update(value=str(zip_path))
 
 
 def on_load_queue():

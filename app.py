@@ -47,6 +47,7 @@ from queue_callbacks import (
     on_clear_queue,
     on_execute_queue,
     on_load_queue,
+    on_pack_download,
     on_remove_from_queue,
     on_restore_from_queue,
 )
@@ -446,8 +447,14 @@ def build_app() -> gr.Blocks:
                 queue_state,
                 queue_ui["queue_status"], queue_ui["queue_table"],
                 queue_ui["queue_progress"],
-                queue_ui["download_file"],
             ],
+            api_name=False,
+        )
+
+        queue_ui["download_btn"].click(
+            fn=on_pack_download,
+            inputs=[queue_state],
+            outputs=[queue_ui["download_file"]],
             api_name=False,
         )
 
