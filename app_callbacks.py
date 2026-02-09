@@ -96,8 +96,8 @@ def _get_image_engine(model_type: str):
 def _make_session_id(video_filename: str) -> str:
     """Generate a human-readable session ID from the video filename.
 
-    Format: ``{yyyyMMddHHMM}_{sanitized_name}_{seq}`` where *seq*
-    auto-increments until no matching directory exists.
+    Format: ``{yyyyMMddHHMMSS}_{sanitized_name}``.  The second-level
+    precision makes a numeric suffix unnecessary.
 
     Args:
         video_filename: Original filename of the uploaded video.
@@ -105,7 +105,7 @@ def _make_session_id(video_filename: str) -> str:
     Returns:
         A unique, filesystem/URL-safe session ID.
     """
-    date_prefix = datetime.now().strftime("%Y%m%d%H%M")
+    date_prefix = datetime.now().strftime("%Y%m%d%H%M%S")
 
     stem = Path(video_filename).stem
     stem = unicodedata.normalize("NFKC", stem)
@@ -115,12 +115,7 @@ def _make_session_id(video_filename: str) -> str:
     if not stem:
         stem = "video"
 
-    base = f"{date_prefix}_{stem}"
-    sessions_dir = WORKSPACE_DIR / "sessions"
-    seq = 1
-    while (sessions_dir / f"{base}_{seq}").exists():
-        seq += 1
-    return f"{base}_{seq}"
+    return f"{date_prefix}_{stem}"
 
 
 # ---------------------------------------------------------------------------
