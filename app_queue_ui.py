@@ -28,6 +28,7 @@ def build_queue_section() -> dict:
                 "**清空队列** 移除所有任务<br>"
                 "**重置状态** 将所有任务重置为 pending<br>"
                 "**执行队列** 执行所有 pending 任务<br>"
+                "**停止执行** 当前任务完成后停止后续任务<br>"
                 "**发送飞书通知** 为已完成任务重发通知<br>"
                 "**打包下载** 将已完成结果打包为 zip"
                 "</small>"
@@ -41,6 +42,7 @@ def build_queue_section() -> dict:
             clear_btn = gr.Button("清空队列", variant="stop")
             reset_status_btn = gr.Button("重置状态")
             execute_btn = gr.Button("执行队列", variant="primary")
+            stop_btn = gr.Button("停止执行", variant="stop")
             feishu_btn = gr.Button("发送飞书通知")
             download_btn = gr.Button("打包下载")
             download_file = gr.File(label="下载结果", interactive=False)
@@ -58,5 +60,6 @@ def build_queue_section() -> dict:
         "feishu_btn": feishu_btn,
         "reset_status_btn": reset_status_btn,
         "execute_btn": execute_btn,
+        "stop_btn": stop_btn,
         "queue_progress": queue_progress,
     }

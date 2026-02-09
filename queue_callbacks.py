@@ -25,7 +25,7 @@ from config import (
     VIDEOMAMA_SEED,
     WORKSPACE_DIR,
 )
-from matting_runner import execute_queue
+from matting_runner import execute_queue, request_queue_cancel
 from queue_models import load_queue, save_queue
 from session_store import empty_state, load_session, save_session_state
 from utils.notify import upload_and_notify
@@ -346,7 +346,7 @@ def _pack_results_zip(queue: list[str]) -> Path | None:
 def on_execute_queue(
     _queue_progress: str,
     queue_state: list[str],
-    progress=gr.Progress(track_tqdm=True),
+    progress=gr.Progress(track_tqdm=False),
 ):
     """Execute all pending queue items sequentially.
 
@@ -489,6 +489,15 @@ def on_send_feishu(queue_state: list[str]):
         gr.Info(f"飞书通知: {success} 条发送成功，{failed} 条失败。")
     else:
         gr.Info(f"飞书通知: {success} 条全部发送成功。")
+
+
+def on_stop_queue():
+    """Request cancellation of the running queue execution.
+
+    The current task will finish; subsequent tasks will be skipped.
+    """
+    request_queue_cancel()
+    gr.Info("已请求停止，当前任务完成后将停止执行。")
 
 
 def on_load_queue():

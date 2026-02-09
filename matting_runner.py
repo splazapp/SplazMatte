@@ -35,6 +35,23 @@ log = logging.getLogger(__name__)
 
 ProgressCallback = Callable[[float, str], None] | None
 
+# ---------------------------------------------------------------------------
+# Queue cancellation flag
+# ---------------------------------------------------------------------------
+_queue_cancel_requested = False
+
+
+def request_queue_cancel():
+    """Signal the running queue to stop after the current task finishes."""
+    global _queue_cancel_requested
+    _queue_cancel_requested = True
+
+
+def reset_queue_cancel():
+    """Clear the cancellation flag (called at queue execution start)."""
+    global _queue_cancel_requested
+    _queue_cancel_requested = False
+
 
 # ---------------------------------------------------------------------------
 # Lazy-loaded engine singletons (matting-pipeline engines only)
@@ -277,11 +294,11 @@ def run_matting_task(
 
     if matting_engine == "VideoMaMa":
         alphas, foregrounds = run_videomama(
-            state, batch_size, overlap, seed, progress_callback,
+            state, batch_size, overlap, seed, _progress,
         )
     else:
         alphas, foregrounds = run_matanyone(
-            state, erode, dilate, progress_callback,
+            state, erode, dilate, _progress,
         )
 
     session_dir = WORKSPACE_DIR / "sessions" / state["session_id"]
@@ -359,6 +376,8 @@ def execute_queue(
     if not pending_sids:
         return 0, 0, []
 
+    reset_queue_cancel()
+
     total = len(pending_sids)
     log.info("========== 开始执行队列 (%d 个任务) ==========", total)
 
@@ -367,6 +386,9 @@ def execute_queue(
     timings: list[str] = []
 
     for i, sid in enumerate(pending_sids, start=1):
+        if _queue_cancel_requested:
+            log.info("用户取消了队列执行")
+            break
         loaded = load_session(sid)
         if loaded is None:
             log.warning("Cannot load session %s, skipping", sid)

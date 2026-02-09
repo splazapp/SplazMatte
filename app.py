@@ -52,6 +52,7 @@ from queue_callbacks import (
     on_reset_status,
     on_restore_from_queue,
     on_send_feishu,
+    on_stop_queue,
 )
 
 logging.basicConfig(
@@ -468,6 +469,13 @@ def build_app() -> gr.Blocks:
                 queue_ui["queue_status"], queue_ui["queue_table"],
                 queue_ui["queue_progress"],
             ],
+            api_name=False,
+        )
+
+        queue_ui["stop_btn"].click(
+            fn=on_stop_queue,
+            inputs=[],
+            outputs=[],
             api_name=False,
         )
 
