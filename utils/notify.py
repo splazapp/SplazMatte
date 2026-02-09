@@ -75,6 +75,11 @@ def upload_and_notify(
         start_time=start_time,
         end_time=end_time,
         cdn_urls=cdn_urls,
+        matting_engine=state.get("matting_engine", "MatAnyone"),
+        model_type=state.get("model_type", "SAM2"),
+        batch_size=state.get("batch_size", 0),
+        overlap=state.get("overlap", 0),
+        seed=state.get("seed", 0),
     )
 
 

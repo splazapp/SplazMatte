@@ -73,6 +73,27 @@ def send_feishu_startup(local_url: str) -> None:
     _post_card(card)
 
 
+def _sam_label(model_type: str) -> str:
+    """Return human-readable SAM model name."""
+    return "SAM 3" if model_type == "SAM3" else "SAM 2.1"
+
+
+def _engine_params_line(
+    engine: str,
+    *,
+    erode: int,
+    dilate: int,
+    warmup: int,
+    batch_size: int,
+    overlap: int,
+    seed: int,
+) -> str:
+    """Return the engine-specific parameter summary line."""
+    if engine == "VideoMaMa":
+        return f"批次大小: {batch_size} | 重叠帧: {overlap} | 随机种子: {seed}"
+    return f"腐蚀核: {erode} | 膨胀核: {dilate} | Warmup: {warmup}"
+
+
 def send_feishu_success(
     *,
     session_id: str,
@@ -92,6 +113,11 @@ def send_feishu_success(
     start_time: str,
     end_time: str,
     cdn_urls: dict[str, str],
+    matting_engine: str = "MatAnyone",
+    model_type: str = "SAM2",
+    batch_size: int = 0,
+    overlap: int = 0,
+    seed: int = 0,
 ) -> None:
     """Send a success notification card to Feishu.
 
@@ -113,6 +139,11 @@ def send_feishu_success(
         start_time: ISO-formatted start time string.
         end_time: ISO-formatted end time string.
         cdn_urls: Mapping of filename → CDN URL.
+        matting_engine: Matting engine name (``MatAnyone`` or ``VideoMaMa``).
+        model_type: SAM model variant (``SAM2`` or ``SAM3``).
+        batch_size: VideoMaMa batch size (only used when engine is VideoMaMa).
+        overlap: VideoMaMa overlap frames (only used when engine is VideoMaMa).
+        seed: VideoMaMa random seed (only used when engine is VideoMaMa).
     """
     keyframes_str = ", ".join(str(i) for i in sorted(keyframe_indices))
 
@@ -131,8 +162,8 @@ def send_feishu_success(
         f"- 格式: {video_format} | "
         f"大小: {_format_file_size(file_size)}\n\n"
         f"**模型与参数**\n"
-        f"- 模型: SAM 2.1 + MatAnyone\n"
-        f"- 腐蚀核: {erode} | 膨胀核: {dilate} | Warmup: {warmup}\n"
+        f"- 模型: {_sam_label(model_type)} + {matting_engine}\n"
+        f"- {_engine_params_line(matting_engine, erode=erode, dilate=dilate, warmup=warmup, batch_size=batch_size, overlap=overlap, seed=seed)}\n"
         f"- 关键帧: [{keyframes_str}]\n\n"
         f"**处理耗时**\n"
         f"- 开始: {start_time}\n"
