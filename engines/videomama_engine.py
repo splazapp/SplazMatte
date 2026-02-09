@@ -142,8 +142,15 @@ class VideoMaMaEngine:
                 frames_dir, masks, start, end, batch_size,
             )
 
+            # Build sub-batch progress reporter
+            def _sub_progress(frac: float, _base=batches_done, _total=total_batches):
+                if progress_callback is not None:
+                    progress_callback((_base + frac) / _total)
+
             # Run inference
-            batch_alphas = self._process_batch(batch_frames, batch_masks, seed)
+            batch_alphas = self._process_batch(
+                batch_frames, batch_masks, seed, _sub_progress,
+            )
 
             # Free intermediate tensors cached by MPS/CUDA
             if self.device.type == "mps":
@@ -259,6 +266,7 @@ class VideoMaMaEngine:
         frames_np: list[np.ndarray],
         masks_np: list[np.ndarray],
         seed: int,
+        stage_callback: Callable[[float], None] | None = None,
     ) -> list[np.ndarray]:
         """Run VideoMaMa inference on a single batch.
 
@@ -269,10 +277,15 @@ class VideoMaMaEngine:
             frames_np: List of (H, W, 3) uint8 RGB frames.
             masks_np: List of (H, W) uint8 masks.
             seed: Random seed.
+            stage_callback: Called with fraction [0, 1] after each stage.
 
         Returns:
             List of (H, W) uint8 alpha arrays at original resolution.
         """
+        def _report(frac: float) -> None:
+            if stage_callback is not None:
+                stage_callback(frac)
+
         orig_h, orig_w = frames_np[0].shape[:2]
         pipe = self.pipeline
         dtype = pipe.weight_dtype
@@ -308,6 +321,7 @@ class VideoMaMaEngine:
         ).image_embeds
         encoder_hidden = torch.zeros_like(image_embeddings).unsqueeze(1)
         del first_frame, clip_input, pixel_values, image_embeddings
+        _report(0.1)
 
         # --- 3. Offload CLIP (no longer needed) ---
         if is_mps:
@@ -321,6 +335,8 @@ class VideoMaMaEngine:
         del cond_video, mask_video
         if is_mps:
             torch.mps.empty_cache()
+
+        _report(0.3)
 
         # --- 5. Offload VAE (not needed during UNet) ---
         if is_mps:
@@ -350,6 +366,7 @@ class VideoMaMaEngine:
         del unet_input, encoder_hidden, timesteps, added_time_ids
         if is_mps:
             torch.mps.empty_cache()
+        _report(0.7)
 
         # --- 7. Offload UNet, bring VAE back for decode ---
         if is_mps:
@@ -373,6 +390,8 @@ class VideoMaMaEngine:
             .mean(dim=1, keepdim=True)
             .repeat(1, 3, 1, 1)
         )
+
+        _report(0.9)
 
         # --- 9. Restore all models to device for next batch ---
         if is_mps:

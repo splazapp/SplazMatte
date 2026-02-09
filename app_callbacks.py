@@ -531,7 +531,7 @@ def on_start_matting(
                 state, int(batch_size), int(overlap), int(seed), progress,
             )
         else:
-            alphas, foregrounds = _run_matanyone(state, erode, dilate)
+            alphas, foregrounds = _run_matanyone(state, erode, dilate, progress)
 
         session_dir = WORKSPACE_DIR / "sessions" / state["session_id"]
         alpha_path = session_dir / "alpha.mp4"
@@ -607,9 +607,18 @@ def _run_videomama(
 
 
 def _run_matanyone(
-    state: dict, erode: int, dilate: int,
+    state: dict,
+    erode: int,
+    dilate: int,
+    progress: gr.Progress | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Run MatAnyone matting pipeline.
+
+    Args:
+        state: Session state dict.
+        erode: Erosion kernel size.
+        dilate: Dilation kernel size.
+        progress: Gradio progress tracker.
 
     Returns:
         Tuple of (alphas, foregrounds) arrays.
@@ -619,10 +628,12 @@ def _run_matanyone(
 
     log.info("开始 MatAnyone 推理...")
     engine = _get_matanyone()
+    cb = (lambda f: progress(f, desc="MatAnyone 推理中...")) if progress else None
     return engine.process(
         frames=frames_tensor,
         keyframe_masks=state["keyframes"],
         erode=erode,
         dilate=dilate,
         warmup=DEFAULT_WARMUP,
+        progress_callback=cb,
     )

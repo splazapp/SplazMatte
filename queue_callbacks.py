@@ -395,7 +395,7 @@ def _execute_single_item(
             state, item.batch_size, item.overlap, item.seed, tp,
         )
     else:
-        alphas, foregrounds = _run_matanyone(state, item.erode, item.dilate)
+        alphas, foregrounds = _run_matanyone(state, item.erode, item.dilate, tp)
 
     # Phase 3: Encode output videos
     tp(0, "编码视频...")
