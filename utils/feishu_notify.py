@@ -122,7 +122,7 @@ def send_feishu_success(
     links_md = "\n".join(links_lines) if links_lines else "无"
 
     content_md = (
-        f"**Session**: `{session_id}`\n\n"
+        f"**Session**: {session_id}\n\n"
         f"**原始视频**\n"
         f"- 文件名: {source_filename}\n"
         f"- 分辨率: {video_width}×{video_height}\n"
@@ -171,7 +171,7 @@ def send_feishu_failure(session_id: str, error: Exception) -> None:
         stacktrace = stacktrace[:MAX_STACKTRACE_LEN] + "\n... (truncated)"
 
     content_md = (
-        f"**Session**: `{session_id}`\n"
+        f"**Session**: {session_id}\n"
         f"**设备**: {_device_info()}\n"
         f"**错误类型**: {type(error).__name__}\n"
         f"**错误信息**: {error}\n\n"
