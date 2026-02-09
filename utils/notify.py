@@ -52,7 +52,7 @@ def upload_and_notify(
 
     cdn_urls = upload_session(state["session_id"], files_to_upload)
 
-    source_name = (
+    source_name = state.get("original_filename") or (
         Path(state["source_video_path"]).name
         if state.get("source_video_path")
         else "unknown"
