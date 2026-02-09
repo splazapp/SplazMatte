@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import logging
+import platform
 from logging.handlers import RotatingFileHandler
 
 import gradio as gr
@@ -23,6 +24,7 @@ from config import (
     VIDEOMAMA_BATCH_SIZE,
     VIDEOMAMA_OVERLAP,
     VIDEOMAMA_SEED,
+    get_device,
 )
 from app_callbacks import (
     empty_state,
@@ -97,7 +99,14 @@ def _read_processing_log() -> str:
 def build_app() -> gr.Blocks:
     """Construct the Gradio Blocks application."""
     with gr.Blocks(title="SplazMatte") as app:
+        device = get_device()
+        device_label = {"cuda": "CUDA (GPU)", "mps": "MPS (Apple Silicon)", "cpu": "CPU"}
+        hostname = platform.node() or "unknown"
         gr.Markdown("# SplazMatte")
+        gr.Markdown(
+            f"运行设备: **{device_label.get(device.type, device.type)}** | "
+            f"主机: **{hostname}**"
+        )
         gr.Markdown(
             "上传视频，在关键帧上标注遮罩，"
             "然后选择抠图引擎进行抠像。"
