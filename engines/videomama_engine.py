@@ -68,7 +68,7 @@ class VideoMaMaEngine:
         from pipeline_svd_mask import VideoInferencePipeline
 
         log.info("Loading VideoMaMa pipeline (SVD: %s, UNet: %s)", svd_path, unet_path)
-        weight_dtype = torch.float32 if self.device.type == "cpu" else torch.float16
+        weight_dtype = torch.float32 if self.device.type == "cpu" else torch.bfloat16
         self.pipeline = VideoInferencePipeline(
             base_model_path=str(svd_path),
             unet_checkpoint_path=str(unet_path),
