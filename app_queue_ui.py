@@ -34,7 +34,7 @@ def build_queue_section() -> dict:
             )
         with gr.Column(scale=1):
             remove_idx = gr.Number(
-                value=1, label="序号", precision=0, minimum=1,
+                value=1, label="选择序号", precision=0, minimum=1,
             )
             restore_btn = gr.Button("恢复编辑")
             remove_btn = gr.Button("移除")
