@@ -280,7 +280,7 @@ def restore_from_queue(
 
 
 def _pack_results_zip(queue: list[str]) -> Path | None:
-    """Pack alpha.mp4 and foreground.mp4 from done sessions into a zip."""
+    """Pack output videos and original video from done sessions into a zip."""
     zip_path = WORKSPACE_DIR / "results.zip"
     packed = 0
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -294,6 +294,16 @@ def _pack_results_zip(queue: list[str]) -> Path | None:
                 src = session_dir / filename
                 if src.exists():
                     zf.write(src, f"{video_name}/{filename}")
+                    packed += 1
+
+            # Keep the original input video for convenient local re-edit/review.
+            source_video_path = info.get("source_video_path")
+            if source_video_path:
+                source_video = Path(source_video_path)
+                if source_video.exists() and source_video.is_file():
+                    original_name = info.get("original_filename") or source_video.name
+                    original_suffix = Path(original_name).suffix or source_video.suffix or ".mp4"
+                    zf.write(source_video, f"{video_name}/original{original_suffix}")
                     packed += 1
     if packed == 0:
         zip_path.unlink(missing_ok=True)
