@@ -14,11 +14,11 @@ root := justfile_directory()
 # App
 # ---------------------------------------------------------------------------
 
-# Start the Gradio web UI
+# Start the NiceGUI web UI
 app:
     {{python}} {{root}}/app.py
 
-# Start the Gradio web UI with a custom port
+# Start the NiceGUI web UI with a custom port
 [doc("Start web UI on a custom port (default 7870)")]
 app-port port="7870":
     SPLAZMATTE_PORT={{port}} {{python}} {{root}}/app.py
@@ -70,8 +70,8 @@ check:
     @{{python}} -m py_compile {{root}}/session_store.py
     @{{python}} -m py_compile {{root}}/matting_runner.py
     @{{python}} -m py_compile {{root}}/run.py
-    @{{python}} -m py_compile {{root}}/app_callbacks.py
-    @{{python}} -m py_compile {{root}}/queue_callbacks.py
+    @{{python}} -m py_compile {{root}}/app_logic.py
+    @{{python}} -m py_compile {{root}}/queue_logic.py
     @{{python}} -m py_compile {{root}}/queue_models.py
     @{{python}} -m py_compile {{root}}/app.py
     @echo "All files OK"

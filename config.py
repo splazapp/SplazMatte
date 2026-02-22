@@ -68,7 +68,7 @@ OSS_PREFIX = os.environ.get("SPLAZMATTE_OSS_PREFIX", "splazmatte")
 # 飞书机器人
 FEISHU_WEBHOOK_URL = os.environ.get("SPLAZMATTE_FEISHU_WEBHOOK_URL", "")
 
-# Processing log (displayed in Gradio UI)
+# Processing log (displayed in UI)
 PROCESSING_LOG_FILE = WORKSPACE_DIR / "processing.log"
 
 
@@ -81,5 +81,8 @@ def get_device() -> torch.device:
     return torch.device("cpu")
 
 
-# Gradio server
-GRADIO_SERVER_PORT = int(os.environ.get("SPLAZMATTE_PORT", "7870"))
+# Web server (NiceGUI)
+SERVER_PORT = int(os.environ.get("SPLAZMATTE_PORT", "7870"))
+
+# NiceGUI storage secret (required for app.storage.user and app.storage.browser)
+STORAGE_SECRET = os.environ.get("SPLAZMATTE_STORAGE_SECRET", "splazmatte-default-secret-change-in-production")

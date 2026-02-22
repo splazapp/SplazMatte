@@ -30,8 +30,8 @@ omegaconf>=2.3
 hydra-core>=1.3
 iopath>=0.1.10
 
-# UI (Gradio)
-gradio>=4.0
+# UI (NiceGUI)
+nicegui>=2.0
 
 # Cloud storage (R2 / Aliyun OSS)
 boto3>=1.34.0

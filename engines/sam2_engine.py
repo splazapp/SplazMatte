@@ -21,6 +21,17 @@ if str(_sam2_root) not in sys.path:
 warnings.filterwarnings("ignore", message="cannot import name '_C' from 'sam2'")
 
 
+def _reset_hydra_for_sam2() -> None:
+    """Rebind Hydra config search path to the SAM2 module."""
+    from hydra import initialize_config_module
+    from hydra.core.global_hydra import GlobalHydra
+
+    hydra = GlobalHydra.instance()
+    if hydra.is_initialized():
+        hydra.clear()
+    initialize_config_module("sam2", version_base="1.2")
+
+
 class SAM2Engine:
     """Wrapper around SAM2.1 image predictor for point-based segmentation.
 
@@ -44,6 +55,10 @@ class SAM2Engine:
             device: Torch device. Auto-detected if None.
         """
         self.device = device or get_device()
+
+        # MatAnyone may have initialized Hydra with its own config root.
+        # Reset here so SAM2 configs resolve from the sam2 package.
+        _reset_hydra_for_sam2()
 
         # Import SAM2 build utilities (triggers hydra config init via sam2/__init__.py)
         from sam2.build_sam import build_sam2

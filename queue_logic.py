@@ -1,0 +1,426 @@
+"""UI-agnostic queue logic for SplazMatte.
+
+All functions return structured dicts. No Gradio or NiceGUI imports.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import zipfile
+from pathlib import Path
+from typing import Any, Callable
+
+from config import (
+    DEFAULT_DILATE,
+    DEFAULT_ERODE,
+    VIDEOMAMA_BATCH_SIZE,
+    VIDEOMAMA_OVERLAP,
+    VIDEOMAMA_SEED,
+    WORKSPACE_DIR,
+)
+from matting_runner import execute_queue, request_queue_cancel
+from queue_models import load_queue, save_queue
+from session_store import empty_state, load_session, save_session_state
+from utils.notify import upload_and_notify
+
+from app_logic import clear_processing_log, keyframe_display, keyframe_gallery, render_frame
+
+log = logging.getLogger(__name__)
+
+ProgressCallback = Callable[[float, str], None] | None
+
+
+def read_session_info(session_id: str) -> dict | None:
+    """Read meta.json + state.json for a session. Returns None on failure."""
+    session_dir = WORKSPACE_DIR / "sessions" / session_id
+    meta_path = session_dir / "meta.json"
+    state_path = session_dir / "state.json"
+    if not meta_path.exists() or not state_path.exists():
+        return None
+    try:
+        meta = json.loads(meta_path.read_text())
+        state = json.loads(state_path.read_text())
+        return {**meta, **state}
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def queue_status_text(queue: list[str]) -> str:
+    """Build status string from the queue list."""
+    if not queue:
+        return "队列为空。"
+    pending = done = error = 0
+    for sid in queue:
+        info = read_session_info(sid)
+        status = info.get("task_status", "") if info else ""
+        if status == "done":
+            done += 1
+        elif status == "error":
+            error += 1
+        else:
+            pending += 1
+    parts = [f"队列中 {len(queue)} 个任务"]
+    if pending:
+        parts.append(f"待处理: {pending}")
+    if done:
+        parts.append(f"完成: {done}")
+    if error:
+        parts.append(f"错误: {error}")
+    return " | ".join(parts)
+
+
+def queue_table_rows(queue: list[str]) -> list[list]:
+    """Build table rows from the queue list."""
+    rows = []
+    for i, sid in enumerate(queue, start=1):
+        info = read_session_info(sid)
+        if info is None:
+            rows.append([i, sid, 0, 0, "No", "-", "丢失"])
+            continue
+        video_name = info.get("original_filename", sid)
+        num_frames = info.get("num_frames", 0)
+        kf_indices = info.get("keyframe_indices", [])
+        has_prop = "Yes" if info.get("has_propagation") else "No"
+        engine = info.get("matting_engine", "MatAnyone")
+        engine_short = "MA" if engine == "MatAnyone" else "VM"
+        status = info.get("task_status", "pending")
+        rows.append([i, video_name, num_frames, len(kf_indices), has_prop, engine_short, status])
+    return rows
+
+
+def load_queue_display() -> dict[str, Any]:
+    """Load queue from disk and return display data."""
+    queue = load_queue()
+    return {
+        "queue_state": queue,
+        "queue_status_text": queue_status_text(queue),
+        "queue_table_rows": queue_table_rows(queue),
+    }
+
+
+def add_to_queue(
+    matting_engine: str,
+    erode: int,
+    dilate: int,
+    batch_size: int,
+    overlap: int,
+    seed: int,
+    session_state: dict,
+    queue_state: list[str],
+) -> dict[str, Any]:
+    """Save matting params to session, add to queue, return reset UI data."""
+    if not session_state.get("keyframes"):
+        queue = load_queue()
+        return {
+            "session_state": session_state,
+            "queue_state": queue,
+            "queue_status_text": queue_status_text(queue),
+            "queue_table_rows": queue_table_rows(queue),
+            "warning": "请至少保存一个关键帧后再添加到队列。",
+        }
+
+    session_state["matting_engine"] = matting_engine
+    session_state["erode"] = int(erode)
+    session_state["dilate"] = int(dilate)
+    session_state["batch_size"] = int(batch_size)
+    session_state["overlap"] = int(overlap)
+    session_state["seed"] = int(seed)
+    session_state["task_status"] = "pending"
+    session_state["error_msg"] = ""
+    save_session_state(session_state)
+
+    queue = load_queue()
+    sid = session_state["session_id"]
+    if sid not in queue:
+        queue.append(sid)
+    save_queue(queue)
+
+    log.info(
+        "Added to queue: session=%s, video=%s, keyframes=%d, engine=%s",
+        sid,
+        session_state.get("original_filename", ""),
+        len(session_state["keyframes"]),
+        matting_engine,
+    )
+
+    new_state = empty_state()
+    return {
+        "session_state": new_state,
+        "queue_state": queue,
+        "queue_status_text": queue_status_text(queue),
+        "queue_table_rows": queue_table_rows(queue),
+        "frame_image": None,
+        "slider_visible": False,
+        "slider_value": 0,
+        "frame_label": "请先上传视频。",
+        "keyframe_info": "尚未保存任何关键帧。",
+        "keyframe_gallery": [],
+        "video_path": None,
+        "propagation_preview_path": None,
+        "alpha_path": None,
+        "fgr_path": None,
+    }
+
+
+def remove_from_queue(remove_idx: int, queue_state: list[str]) -> dict[str, Any]:
+    """Remove a queue item by 1-based index."""
+    queue = load_queue()
+    idx = int(remove_idx) - 1
+    if idx < 0 or idx >= len(queue):
+        return {
+            "queue_state": queue,
+            "queue_status_text": queue_status_text(queue),
+            "queue_table_rows": queue_table_rows(queue),
+            "warning": f"无效序号: {int(remove_idx)}，队列共 {len(queue)} 项。",
+        }
+
+    removed_sid = queue[idx]
+    queue = [*queue[:idx], *queue[idx + 1:]]
+    save_queue(queue)
+    log.info("Removed from queue: session=%s", removed_sid)
+    return {
+        "queue_state": queue,
+        "queue_status_text": queue_status_text(queue),
+        "queue_table_rows": queue_table_rows(queue),
+    }
+
+
+def clear_queue(queue_state: list[str]) -> dict[str, Any]:
+    """Clear all items from the queue."""
+    save_queue([])
+    log.info("Queue cleared")
+    return {
+        "queue_state": [],
+        "queue_status_text": queue_status_text([]),
+        "queue_table_rows": [],
+    }
+
+
+def restore_from_queue(
+    restore_idx: int,
+    session_state: dict,
+    queue_state: list[str],
+) -> dict[str, Any]:
+    """Restore a queue item into the editing area."""
+    queue = load_queue()
+    idx = int(restore_idx) - 1
+    if idx < 0 or idx >= len(queue):
+        return {
+            "session_state": session_state,
+            "queue_state": queue,
+            "queue_status_text": queue_status_text(queue),
+            "queue_table_rows": queue_table_rows(queue),
+            "warning": f"无效序号: {int(restore_idx)}，队列共 {len(queue)} 项。",
+        }
+
+    sid = queue[idx]
+    loaded = load_session(sid)
+    if loaded is None:
+        return {
+            "session_state": session_state,
+            "queue_state": queue,
+            "queue_status_text": queue_status_text(queue),
+            "queue_table_rows": queue_table_rows(queue),
+            "warning": f"无法加载 Session: {sid}",
+        }
+
+    frames_dir = loaded["frames_dir"]
+    if not Path(frames_dir).exists():
+        return {
+            "session_state": session_state,
+            "queue_state": queue,
+            "queue_status_text": queue_status_text(queue),
+            "queue_table_rows": queue_table_rows(queue),
+            "warning": "帧数据目录不存在，无法恢复编辑。",
+        }
+
+    first_kf = min(loaded["keyframes"].keys()) if loaded["keyframes"] else 0
+    loaded["current_frame_idx"] = first_kf
+    loaded["current_mask"] = loaded["keyframes"].get(first_kf)
+
+    session_dir = WORKSPACE_DIR / "sessions" / sid
+    preview_path = session_dir / "propagation_preview.mp4"
+    prop_preview = str(preview_path) if preview_path.exists() else None
+    alpha_path = session_dir / "alpha.mp4"
+    fgr_path = session_dir / "foreground.mp4"
+    alpha_video = str(alpha_path) if alpha_path.exists() else None
+    fgr_video = str(fgr_path) if fgr_path.exists() else None
+    is_ma = loaded.get("matting_engine", "MatAnyone") == "MatAnyone"
+
+    log.info("Restored queue item for editing: session=%s", sid)
+
+    return {
+        "session_state": loaded,
+        "queue_state": queue,
+        "queue_status_text": queue_status_text(queue),
+        "queue_table_rows": queue_table_rows(queue),
+        "frame_image": render_frame(loaded),
+        "slider_visible": True,
+        "slider_max": loaded["num_frames"] - 1,
+        "slider_value": first_kf,
+        "frame_label": f"第 {first_kf} 帧 / 共 {loaded['num_frames'] - 1} 帧",
+        "keyframe_info": keyframe_display(loaded),
+        "keyframe_gallery": keyframe_gallery(loaded),
+        "video_path": str(loaded["source_video_path"]) if loaded["source_video_path"] else None,
+        "model_type": loaded["model_type"],
+        "text_prompt_visible": loaded["model_type"] == "SAM3",
+        "propagation_preview_path": prop_preview,
+        "matting_engine": loaded.get("matting_engine", "MatAnyone"),
+        "erode": loaded.get("erode", DEFAULT_ERODE),
+        "dilate": loaded.get("dilate", DEFAULT_DILATE),
+        "batch_size": loaded.get("batch_size", VIDEOMAMA_BATCH_SIZE),
+        "overlap": loaded.get("overlap", VIDEOMAMA_OVERLAP),
+        "seed": loaded.get("seed", VIDEOMAMA_SEED),
+        "erode_dilate_visible": is_ma,
+        "vm_params_visible": not is_ma,
+        "alpha_path": alpha_video,
+        "fgr_path": fgr_video,
+    }
+
+
+def _pack_results_zip(queue: list[str]) -> Path | None:
+    """Pack alpha.mp4 and foreground.mp4 from done sessions into a zip."""
+    zip_path = WORKSPACE_DIR / "results.zip"
+    packed = 0
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for sid in queue:
+            info = read_session_info(sid)
+            if info is None or info.get("task_status") != "done":
+                continue
+            session_dir = WORKSPACE_DIR / "sessions" / sid
+            video_name = Path(info.get("original_filename", sid)).stem
+            for filename in ("alpha.mp4", "foreground.mp4"):
+                src = session_dir / filename
+                if src.exists():
+                    zf.write(src, f"{video_name}/{filename}")
+                    packed += 1
+    if packed == 0:
+        zip_path.unlink(missing_ok=True)
+        return None
+    return zip_path
+
+
+def pack_download(queue_state: list[str]) -> dict[str, Any]:
+    """Pack results zip. Returns download_path or warning."""
+    queue = load_queue()
+    zip_path = _pack_results_zip(queue)
+    if zip_path is None:
+        return {"download_path": None, "warning": "没有可打包的结果（队列中无已完成的任务）。"}
+    return {"download_path": str(zip_path)}
+
+
+def reset_status(queue_state: list[str]) -> dict[str, Any]:
+    """Reset all queue tasks to pending."""
+    queue = load_queue()
+    if not queue:
+        return {
+            "queue_state": queue,
+            "queue_status_text": queue_status_text(queue),
+            "queue_table_rows": queue_table_rows(queue),
+            "warning": "队列为空。",
+        }
+
+    count = 0
+    for sid in queue:
+        loaded = load_session(sid)
+        if loaded is None:
+            continue
+        loaded["task_status"] = "pending"
+        loaded["error_msg"] = ""
+        save_session_state(loaded)
+        count += 1
+
+    return {
+        "queue_state": queue,
+        "queue_status_text": queue_status_text(queue),
+        "queue_table_rows": queue_table_rows(queue),
+        "info": f"已重置 {count} 个任务为待处理状态。",
+    }
+
+
+def send_feishu(queue_state: list[str]) -> dict[str, Any]:
+    """Send Feishu notification for each completed task."""
+    queue = load_queue()
+    done_sids = [
+        sid for sid in queue
+        if (info := read_session_info(sid)) and info.get("task_status") == "done"
+    ]
+
+    if not done_sids:
+        return {"warning": "队列中没有已完成的任务，无法发送通知。"}
+
+    success = 0
+    failed = 0
+    for sid in done_sids:
+        loaded = load_session(sid)
+        if loaded is None:
+            log.warning("Cannot load session %s for Feishu notify, skipping", sid)
+            failed += 1
+            continue
+        erode = int(loaded.get("erode", DEFAULT_ERODE))
+        dilate = int(loaded.get("dilate", DEFAULT_DILATE))
+        session_dir = WORKSPACE_DIR / "sessions" / sid
+        processing_time = loaded.get("processing_time", 0.0)
+        start_time = loaded.get("start_time", "N/A")
+        end_time = loaded.get("end_time", "N/A")
+        try:
+            upload_and_notify(
+                loaded, erode, dilate, session_dir,
+                processing_time, start_time, end_time,
+            )
+            success += 1
+        except Exception:
+            log.exception("Feishu notify failed for session %s", sid)
+            failed += 1
+
+    if failed:
+        return {"info": f"飞书通知: {success} 条发送成功，{failed} 条失败。"}
+    return {"info": f"飞书通知: {success} 条全部发送成功。"}
+
+
+def stop_queue() -> dict[str, Any]:
+    """Request cancellation of the running queue execution."""
+    request_queue_cancel()
+    return {"info": "已请求停止，当前任务完成后将停止执行。"}
+
+
+def run_execute_queue(progress_callback: ProgressCallback = None) -> dict[str, Any]:
+    """Execute all pending queue items. Long-running; use progress_callback for UI."""
+    queue = load_queue()
+    has_pending = any(
+        (info := read_session_info(sid)) is not None
+        and info.get("task_status", "") in ("pending", "")
+        for sid in queue
+    )
+    if not has_pending:
+        return {
+            "queue_state": queue,
+            "queue_status_text": queue_status_text(queue),
+            "queue_table_rows": queue_table_rows(queue),
+            "queue_progress_text": "没有待处理的任务。",
+            "warning": "队列中没有待处理的任务。",
+        }
+
+    clear_processing_log()
+
+    def progress_cb(frac: float, desc: str = ""):
+        if progress_callback:
+            progress_callback(frac, desc)
+
+    done_count, error_count, timings = execute_queue(progress_cb)
+
+    summary_parts = [f"队列执行完毕: {done_count} 成功"]
+    if error_count:
+        summary_parts[0] += f", {error_count} 失败"
+    for t in timings:
+        summary_parts.append(f"- {t}")
+    summary = "\n".join(summary_parts)
+
+    queue = load_queue()
+    return {
+        "queue_state": queue,
+        "queue_status_text": queue_status_text(queue),
+        "queue_table_rows": queue_table_rows(queue),
+        "queue_progress_text": summary,
+    }
