@@ -13,12 +13,17 @@ from tqdm import tqdm
 log = logging.getLogger(__name__)
 
 
-def extract_frames(video_path: Path, output_dir: Path) -> tuple[int, float]:
+def extract_frames(
+    video_path: Path,
+    output_dir: Path,
+    max_frames: int | None = None,
+) -> tuple[int, float]:
     """Extract video frames to JPEG files using ffmpeg.
 
     Args:
         video_path: Path to input video file.
-        output_dir: Directory to write JPEG frames (named 000000.jpg, ...).
+        output_dir: Directory to write JPEG frames (named 000001.jpg, ...).
+        max_frames: If set, extract at most this many frames (for tracking limit).
 
     Returns:
         Tuple of (num_frames, fps).
@@ -40,14 +45,15 @@ def extract_frames(video_path: Path, output_dir: Path) -> tuple[int, float]:
     fps = float(num) / float(den)
 
     # Extract frames
-    subprocess.run(
-        [
-            "ffmpeg", "-y", "-i", str(video_path),
-            "-q:v", "2",
-            str(output_dir / "%06d.jpg"),
-        ],
-        capture_output=True, check=True,
-    )
+    cmd = [
+        "ffmpeg", "-y", "-i", str(video_path),
+        "-q:v", "2",
+    ]
+    if max_frames is not None:
+        cmd.extend(["-vframes", str(max_frames)])
+    cmd.append(str(output_dir / "%06d.jpg"))
+
+    subprocess.run(cmd, capture_output=True, check=True)
 
     num_frames = len(list(output_dir.glob("*.jpg")))
     log.info("Extracted %d frames at %.2f fps from %s", num_frames, fps, video_path.name)

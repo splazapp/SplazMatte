@@ -40,6 +40,9 @@ oss2>=2.18.0
 # HTTP (Feishu webhook)
 requests>=2.31.0
 
+# Visualization
+matplotlib>=3.5.0
+
 # Utilities
 tqdm>=4.65
 python-dotenv>=1.0.0

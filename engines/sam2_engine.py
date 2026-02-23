@@ -8,7 +8,13 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from config import SAM2_CHECKPOINT, SAM2_CONFIG, SDKS_DIR, get_device
+from config import (
+    SAM2_CHECKPOINT,
+    SAM2_CONFIG,
+    SAM2_USE_CPU_ON_MPS,
+    SDKS_DIR,
+    get_device,
+)
 
 log = logging.getLogger(__name__)
 
@@ -54,7 +60,15 @@ class SAM2Engine:
             config: Config name relative to sam2/configs/ (hydra).
             device: Torch device. Auto-detected if None.
         """
-        self.device = device or get_device()
+        base = device or get_device()
+        if (
+            str(base) == "mps"
+            and SAM2_USE_CPU_ON_MPS
+        ):
+            self.device = torch.device("cpu")
+            log.info("SAM2: using CPU on MPS (bicubic fallback avoidance)")
+        else:
+            self.device = base
 
         # MatAnyone may have initialized Hydra with its own config root.
         # Reset here so SAM2 configs resolve from the sam2 package.

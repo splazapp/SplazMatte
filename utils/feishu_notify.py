@@ -189,6 +189,81 @@ def send_feishu_success(
     _post_card(card)
 
 
+def send_feishu_tracking_success(
+    *,
+    session_id: str,
+    source_filename: str,
+    video_width: int,
+    video_height: int,
+    num_frames: int,
+    fps: float,
+    keyframe_indices: list[int],
+    total_points: int,
+    use_grid: bool,
+    grid_size: int,
+    backward_tracking: bool,
+    processing_time: float,
+    start_time: str,
+    end_time: str,
+    cdn_urls: dict[str, str],
+) -> None:
+    """Send a tracking success notification card to Feishu.
+
+    Args:
+        session_id: Unique session identifier.
+        source_filename: Original uploaded video filename.
+        video_width: Video width in pixels.
+        video_height: Video height in pixels.
+        num_frames: Total number of frames.
+        fps: Frames per second.
+        keyframe_indices: List of keyframe frame indices.
+        total_points: Total number of tracking query points.
+        use_grid: Whether grid mode was used.
+        grid_size: Grid size if grid mode.
+        backward_tracking: Whether backward tracking was enabled.
+        processing_time: Total processing seconds.
+        start_time: ISO-formatted start time string.
+        end_time: ISO-formatted end time string.
+        cdn_urls: Mapping of filename to CDN URL.
+    """
+    keyframes_str = ", ".join(str(i) for i in sorted(keyframe_indices))
+    mode = f"网格 {grid_size}x{grid_size}" if use_grid else f"手动 {total_points} 点"
+    direction = "双向" if backward_tracking else "仅前向"
+
+    links_lines = [f"- [{name}]({url})" for name, url in cdn_urls.items()]
+    links_md = "\n".join(links_lines) if links_lines else "无"
+
+    content_md = (
+        f"**Session**: {session_id}\n\n"
+        f"**原始视频**\n"
+        f"- 文件名: {source_filename}\n"
+        f"- 分辨率: {video_width}×{video_height}\n"
+        f"- {num_frames} 帧 | {fps:.2f} fps\n\n"
+        f"**追踪参数**\n"
+        f"- 模式: {mode}\n"
+        f"- 方向: {direction}\n"
+        f"- 关键帧: [{keyframes_str}]\n\n"
+        f"**处理耗时**\n"
+        f"- 开始: {start_time}\n"
+        f"- 结束: {end_time}\n"
+        f"- 总耗时: {_format_duration(processing_time)}\n\n"
+        f"**运行环境**\n"
+        f"- 设备: {_device_info()}\n\n"
+        f"**输出文件**\n{links_md}"
+    )
+
+    card = {
+        "header": {
+            "title": {"tag": "plain_text", "content": "SplazMatte 追踪完成 ✅"},
+            "template": "turquoise",
+        },
+        "elements": [
+            {"tag": "markdown", "content": content_md},
+        ],
+    }
+    _post_card(card)
+
+
 def send_feishu_failure(session_id: str, error: Exception) -> None:
     """Send a failure notification card to Feishu.
 

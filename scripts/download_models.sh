@@ -8,14 +8,17 @@
 # Usage:
 #   bash scripts/download_models.sh              # download all models
 #   bash scripts/download_models.sh --sam3        # SAM3 only
+#   bash scripts/download_models.sh --sam2        # SAM2.1 only
 #   bash scripts/download_models.sh --matanyone   # MatAnyone only
 #   bash scripts/download_models.sh --videomama   # VideoMaMa only
+#   bash scripts/download_models.sh --cotracker   # CoTracker3 only
 #   bash scripts/download_models.sh --verify      # verify existing downloads
 #
 # Parallel download (run each in a separate terminal):
 #   bash scripts/download_models.sh --sam3        # terminal 1
 #   bash scripts/download_models.sh --matanyone   # terminal 2
 #   bash scripts/download_models.sh --videomama   # terminal 3
+#   bash scripts/download_models.sh --cotracker   # terminal 4
 #
 set -euo pipefail
 

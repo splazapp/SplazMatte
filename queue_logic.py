@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 from config import (
+    MATTING_SESSIONS_DIR,
+    TRACKING_SESSIONS_DIR,
     DEFAULT_DILATE,
     DEFAULT_ERODE,
     VIDEOMAMA_BATCH_SIZE,
@@ -20,8 +22,13 @@ from config import (
     WORKSPACE_DIR,
 )
 from matting_runner import execute_queue, request_queue_cancel
-from queue_models import load_queue, save_queue
+from queue_models import QueueItem, load_queue, save_queue
 from session_store import empty_state, load_session, save_session_state
+from tracking_session_store import (
+    load_tracking_session,
+    read_tracking_session_info,
+    save_tracking_session,
+)
 from utils.notify import upload_and_notify
 
 from app_logic import clear_processing_log, keyframe_display, keyframe_gallery, render_frame
@@ -31,9 +38,21 @@ log = logging.getLogger(__name__)
 ProgressCallback = Callable[[float, str], None] | None
 
 
-def read_session_info(session_id: str) -> dict | None:
-    """Read meta.json + state.json for a session. Returns None on failure."""
-    session_dir = WORKSPACE_DIR / "sessions" / session_id
+def read_item_info(item: QueueItem) -> dict | None:
+    """Read lightweight session info for a queue item.
+
+    Dispatches to tracking or matting session stores based on item type.
+
+    Args:
+        item: Queue item dict with "type" and "sid" keys.
+
+    Returns:
+        Merged meta + state dict, or None on failure.
+    """
+    if item["type"] == "tracking":
+        return read_tracking_session_info(item["sid"])
+    # Default: matting session
+    session_dir = MATTING_SESSIONS_DIR / item["sid"]
     meta_path = session_dir / "meta.json"
     state_path = session_dir / "state.json"
     if not meta_path.exists() or not state_path.exists():
@@ -46,13 +65,13 @@ def read_session_info(session_id: str) -> dict | None:
         return None
 
 
-def queue_status_text(queue: list[str]) -> str:
+def queue_status_text(queue: list[QueueItem]) -> str:
     """Build status string from the queue list."""
     if not queue:
         return "队列为空。"
     pending = done = error = 0
-    for sid in queue:
-        info = read_session_info(sid)
+    for item in queue:
+        info = read_item_info(item)
         status = info.get("task_status", "") if info else ""
         if status == "done":
             done += 1
@@ -70,22 +89,31 @@ def queue_status_text(queue: list[str]) -> str:
     return " | ".join(parts)
 
 
-def queue_table_rows(queue: list[str]) -> list[list]:
-    """Build table rows from the queue list."""
+def queue_table_rows(queue: list[QueueItem]) -> list[list]:
+    """Build table rows from the queue list.
+
+    Columns: #, 类型, 文件名, 帧数, 关键帧, 引擎/模式, 状态
+    """
     rows = []
-    for i, sid in enumerate(queue, start=1):
-        info = read_session_info(sid)
+    for i, item in enumerate(queue, start=1):
+        info = read_item_info(item)
+        task_type = item["type"]
+        type_label = "追踪" if task_type == "tracking" else "抠像"
         if info is None:
-            rows.append([i, sid, 0, 0, "No", "-", "丢失"])
+            rows.append([i, type_label, item["sid"], 0, 0, "-", "丢失"])
             continue
-        video_name = info.get("original_filename", sid)
+        video_name = info.get("original_filename", item["sid"])
         num_frames = info.get("num_frames", 0)
         kf_indices = info.get("keyframe_indices", [])
-        has_prop = "Yes" if info.get("has_propagation") else "No"
-        engine = info.get("matting_engine", "MatAnyone")
-        engine_short = "MA" if engine == "MatAnyone" else "VM"
         status = info.get("task_status", "pending")
-        rows.append([i, video_name, num_frames, len(kf_indices), has_prop, engine_short, status])
+
+        if task_type == "tracking":
+            total_pts = info.get("total_points", 0)
+            mode = f"点x{total_pts}"
+        else:
+            engine = info.get("matting_engine", "MatAnyone")
+            mode = "MA" if engine == "MatAnyone" else "VM"
+        rows.append([i, type_label, video_name, num_frames, len(kf_indices), mode, status])
     return rows
 
 
@@ -107,7 +135,7 @@ def add_to_queue(
     overlap: int,
     seed: int,
     session_state: dict,
-    queue_state: list[str],
+    queue_state: list[QueueItem],
 ) -> dict[str, Any]:
     """Save matting params to session, add to queue, return reset UI data."""
     if not session_state.get("keyframes"):
@@ -132,8 +160,9 @@ def add_to_queue(
 
     queue = load_queue()
     sid = session_state["session_id"]
-    if sid not in queue:
-        queue.append(sid)
+    new_item: QueueItem = {"type": "matting", "sid": sid}
+    if not any(item["sid"] == sid for item in queue):
+        queue.append(new_item)
     save_queue(queue)
 
     log.info(
@@ -163,7 +192,59 @@ def add_to_queue(
     }
 
 
-def remove_from_queue(remove_idx: int, queue_state: list[str]) -> dict[str, Any]:
+def add_tracking_to_queue(
+    session_state: dict,
+    queue_state: list[QueueItem],
+) -> dict[str, Any]:
+    """Save tracking session, add to queue, return reset UI data.
+
+    Args:
+        session_state: Current tracking state dict.
+        queue_state: Current queue items.
+
+    Returns:
+        Dict with session_state (reset), queue_state, queue display data.
+    """
+    from cotracker_logic import empty_tracking_state
+
+    if not session_state.get("keyframes"):
+        queue = load_queue()
+        return {
+            "session_state": session_state,
+            "queue_state": queue,
+            "queue_status_text": queue_status_text(queue),
+            "queue_table_rows": queue_table_rows(queue),
+            "warning": "请至少保存一个关键帧后再添加到队列。",
+        }
+
+    session_state["task_status"] = "pending"
+    session_state["error_msg"] = ""
+    save_tracking_session(session_state)
+
+    queue = load_queue()
+    sid = session_state["session_id"]
+    new_item: QueueItem = {"type": "tracking", "sid": sid}
+    if not any(item["sid"] == sid for item in queue):
+        queue.append(new_item)
+    save_queue(queue)
+
+    log.info(
+        "Added tracking to queue: session=%s, video=%s, keyframes=%d",
+        sid,
+        session_state.get("original_filename", ""),
+        len(session_state["keyframes"]),
+    )
+
+    new_state = empty_tracking_state()
+    return {
+        "session_state": new_state,
+        "queue_state": queue,
+        "queue_status_text": queue_status_text(queue),
+        "queue_table_rows": queue_table_rows(queue),
+    }
+
+
+def remove_from_queue(remove_idx: int, queue_state: list[QueueItem]) -> dict[str, Any]:
     """Remove a queue item by 1-based index."""
     queue = load_queue()
     idx = int(remove_idx) - 1
@@ -175,10 +256,10 @@ def remove_from_queue(remove_idx: int, queue_state: list[str]) -> dict[str, Any]
             "warning": f"无效序号: {int(remove_idx)}，队列共 {len(queue)} 项。",
         }
 
-    removed_sid = queue[idx]
+    removed = queue[idx]
     queue = [*queue[:idx], *queue[idx + 1:]]
     save_queue(queue)
-    log.info("Removed from queue: session=%s", removed_sid)
+    log.info("Removed from queue: %s session=%s", removed["type"], removed["sid"])
     return {
         "queue_state": queue,
         "queue_status_text": queue_status_text(queue),
@@ -186,7 +267,7 @@ def remove_from_queue(remove_idx: int, queue_state: list[str]) -> dict[str, Any]
     }
 
 
-def clear_queue(queue_state: list[str]) -> dict[str, Any]:
+def clear_queue(queue_state: list[QueueItem]) -> dict[str, Any]:
     """Clear all items from the queue."""
     save_queue([])
     log.info("Queue cleared")
@@ -200,9 +281,13 @@ def clear_queue(queue_state: list[str]) -> dict[str, Any]:
 def restore_from_queue(
     restore_idx: int,
     session_state: dict,
-    queue_state: list[str],
+    queue_state: list[QueueItem],
 ) -> dict[str, Any]:
-    """Restore a queue item into the editing area."""
+    """Restore a queue item into the editing area.
+
+    Returns different keys depending on item type (matting vs tracking).
+    The UI layer checks ``"restore_type"`` to decide which page to update.
+    """
     queue = load_queue()
     idx = int(restore_idx) - 1
     if idx < 0 or idx >= len(queue):
@@ -214,7 +299,20 @@ def restore_from_queue(
             "warning": f"无效序号: {int(restore_idx)}，队列共 {len(queue)} 项。",
         }
 
-    sid = queue[idx]
+    item = queue[idx]
+    sid = item["sid"]
+    task_type = item["type"]
+
+    if task_type == "tracking":
+        return _restore_tracking_item(sid, session_state, queue)
+
+    return _restore_matting_item(sid, session_state, queue)
+
+
+def _restore_matting_item(
+    sid: str, session_state: dict, queue: list[QueueItem],
+) -> dict[str, Any]:
+    """Restore a matting queue item into the editing area."""
     loaded = load_session(sid)
     if loaded is None:
         return {
@@ -239,7 +337,7 @@ def restore_from_queue(
     loaded["current_frame_idx"] = first_kf
     loaded["current_mask"] = loaded["keyframes"].get(first_kf)
 
-    session_dir = WORKSPACE_DIR / "sessions" / sid
+    session_dir = MATTING_SESSIONS_DIR / sid
     preview_path = session_dir / "propagation_preview.mp4"
     prop_preview = str(preview_path) if preview_path.exists() else None
     alpha_path = session_dir / "alpha.mp4"
@@ -248,9 +346,10 @@ def restore_from_queue(
     fgr_video = str(fgr_path) if fgr_path.exists() else None
     is_ma = loaded.get("matting_engine", "MatAnyone") == "MatAnyone"
 
-    log.info("Restored queue item for editing: session=%s", sid)
+    log.info("Restored matting queue item for editing: session=%s", sid)
 
     return {
+        "restore_type": "matting",
         "session_state": loaded,
         "queue_state": queue,
         "queue_status_text": queue_status_text(queue),
@@ -279,39 +378,85 @@ def restore_from_queue(
     }
 
 
-def _pack_results_zip(queue: list[str]) -> Path | None:
-    """Pack output videos and original video from done sessions into a zip."""
+def _restore_tracking_item(
+    sid: str, session_state: dict, queue: list[QueueItem],
+) -> dict[str, Any]:
+    """Restore a tracking queue item into the editing area."""
+    loaded = load_tracking_session(sid)
+    if loaded is None:
+        return {
+            "session_state": session_state,
+            "queue_state": queue,
+            "queue_status_text": queue_status_text(queue),
+            "queue_table_rows": queue_table_rows(queue),
+            "warning": f"无法加载追踪 Session: {sid}",
+        }
+
+    from cotracker_logic import tracking_keyframe_display, tracking_keyframe_gallery
+
+    first_kf = min(loaded["keyframes"].keys()) if loaded.get("keyframes") else 0
+    num_frames = loaded.get("num_frames", 0)
+
+    log.info("Restored tracking queue item for editing: session=%s", sid)
+
+    return {
+        "restore_type": "tracking",
+        "session_state": loaded,
+        "queue_state": queue,
+        "queue_status_text": queue_status_text(queue),
+        "queue_table_rows": queue_table_rows(queue),
+        "slider_max": max(num_frames - 1, 0),
+        "slider_value": first_kf,
+        "keyframe_info": tracking_keyframe_display(loaded),
+        "keyframe_gallery": tracking_keyframe_gallery(loaded),
+    }
+
+
+def _pack_results_zip(queue: list[QueueItem]) -> Path | None:
+    """Pack output files from done sessions into a zip."""
     zip_path = WORKSPACE_DIR / "results.zip"
     packed = 0
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for sid in queue:
-            info = read_session_info(sid)
+        for item in queue:
+            info = read_item_info(item)
             if info is None or info.get("task_status") != "done":
                 continue
-            session_dir = WORKSPACE_DIR / "sessions" / sid
+            sid = item["sid"]
             video_name = Path(info.get("original_filename", sid)).stem
-            for filename in ("alpha.mp4", "foreground.mp4"):
-                src = session_dir / filename
-                if src.exists():
-                    zf.write(src, f"{video_name}/{filename}")
-                    packed += 1
 
-            # Keep the original input video for convenient local re-edit/review.
-            source_video_path = info.get("source_video_path")
-            if source_video_path:
-                source_video = Path(source_video_path)
-                if source_video.exists() and source_video.is_file():
-                    original_name = info.get("original_filename") or source_video.name
-                    original_suffix = Path(original_name).suffix or source_video.suffix or ".mp4"
-                    zf.write(source_video, f"{video_name}/original{original_suffix}")
-                    packed += 1
+            if item["type"] == "tracking":
+                # Pack tracking results
+                results_dir = WORKSPACE_DIR / "tracking_results"
+                session_dir = TRACKING_SESSIONS_DIR / sid
+                # Result video + AE export
+                for pattern in ("tracking_*.mp4", "ae_export_*.txt"):
+                    for f in results_dir.glob(pattern):
+                        zf.write(f, f"{video_name}_tracking/{f.name}")
+                        packed += 1
+            else:
+                # Pack matting results
+                session_dir = MATTING_SESSIONS_DIR / sid
+                for filename in ("alpha.mp4", "foreground.mp4"):
+                    src = session_dir / filename
+                    if src.exists():
+                        zf.write(src, f"{video_name}/{filename}")
+                        packed += 1
+
+                source_video_path = info.get("source_video_path")
+                if source_video_path:
+                    source_video = Path(source_video_path)
+                    if source_video.exists() and source_video.is_file():
+                        original_name = info.get("original_filename") or source_video.name
+                        original_suffix = Path(original_name).suffix or source_video.suffix or ".mp4"
+                        zf.write(source_video, f"{video_name}/original{original_suffix}")
+                        packed += 1
     if packed == 0:
         zip_path.unlink(missing_ok=True)
         return None
     return zip_path
 
 
-def pack_download(queue_state: list[str]) -> dict[str, Any]:
+def pack_download(queue_state: list[QueueItem]) -> dict[str, Any]:
     """Pack results zip. Returns download_path or warning."""
     queue = load_queue()
     zip_path = _pack_results_zip(queue)
@@ -320,7 +465,7 @@ def pack_download(queue_state: list[str]) -> dict[str, Any]:
     return {"download_path": str(zip_path)}
 
 
-def reset_status(queue_state: list[str]) -> dict[str, Any]:
+def reset_status(queue_state: list[QueueItem]) -> dict[str, Any]:
     """Reset all queue tasks to pending."""
     queue = load_queue()
     if not queue:
@@ -332,13 +477,21 @@ def reset_status(queue_state: list[str]) -> dict[str, Any]:
         }
 
     count = 0
-    for sid in queue:
-        loaded = load_session(sid)
-        if loaded is None:
-            continue
-        loaded["task_status"] = "pending"
-        loaded["error_msg"] = ""
-        save_session_state(loaded)
+    for item in queue:
+        if item["type"] == "tracking":
+            loaded = load_tracking_session(item["sid"])
+            if loaded is None:
+                continue
+            loaded["task_status"] = "pending"
+            loaded["error_msg"] = ""
+            save_tracking_session(loaded)
+        else:
+            loaded = load_session(item["sid"])
+            if loaded is None:
+                continue
+            loaded["task_status"] = "pending"
+            loaded["error_msg"] = ""
+            save_session_state(loaded)
         count += 1
 
     return {
@@ -349,36 +502,48 @@ def reset_status(queue_state: list[str]) -> dict[str, Any]:
     }
 
 
-def send_feishu(queue_state: list[str]) -> dict[str, Any]:
+def send_feishu(queue_state: list[QueueItem]) -> dict[str, Any]:
     """Send Feishu notification for each completed task."""
     queue = load_queue()
-    done_sids = [
-        sid for sid in queue
-        if (info := read_session_info(sid)) and info.get("task_status") == "done"
+    done_items = [
+        item for item in queue
+        if (info := read_item_info(item)) and info.get("task_status") == "done"
     ]
 
-    if not done_sids:
+    if not done_items:
         return {"warning": "队列中没有已完成的任务，无法发送通知。"}
 
     success = 0
     failed = 0
-    for sid in done_sids:
-        loaded = load_session(sid)
-        if loaded is None:
-            log.warning("Cannot load session %s for Feishu notify, skipping", sid)
-            failed += 1
-            continue
-        erode = int(loaded.get("erode", DEFAULT_ERODE))
-        dilate = int(loaded.get("dilate", DEFAULT_DILATE))
-        session_dir = WORKSPACE_DIR / "sessions" / sid
-        processing_time = loaded.get("processing_time", 0.0)
-        start_time = loaded.get("start_time", "N/A")
-        end_time = loaded.get("end_time", "N/A")
+    for item in done_items:
+        sid = item["sid"]
         try:
-            upload_and_notify(
-                loaded, erode, dilate, session_dir,
-                processing_time, start_time, end_time,
-            )
+            if item["type"] == "tracking":
+                loaded = load_tracking_session(sid)
+                if loaded is None:
+                    failed += 1
+                    continue
+                from tracking_runner import upload_and_notify_tracking
+                upload_and_notify_tracking(
+                    loaded,
+                    loaded.get("processing_time", 0.0),
+                    loaded.get("start_time", "N/A"),
+                    loaded.get("end_time", "N/A"),
+                )
+            else:
+                loaded = load_session(sid)
+                if loaded is None:
+                    failed += 1
+                    continue
+                erode = int(loaded.get("erode", DEFAULT_ERODE))
+                dilate = int(loaded.get("dilate", DEFAULT_DILATE))
+                session_dir = MATTING_SESSIONS_DIR / sid
+                upload_and_notify(
+                    loaded, erode, dilate, session_dir,
+                    loaded.get("processing_time", 0.0),
+                    loaded.get("start_time", "N/A"),
+                    loaded.get("end_time", "N/A"),
+                )
             success += 1
         except Exception:
             log.exception("Feishu notify failed for session %s", sid)
@@ -390,18 +555,22 @@ def send_feishu(queue_state: list[str]) -> dict[str, Any]:
 
 
 def stop_queue() -> dict[str, Any]:
-    """Request cancellation of the running queue execution."""
+    """Request cancellation of the running queue execution.
+
+    Stops the current task at the next progress checkpoint (typically within
+    a few seconds for tracking, or per-batch for matting).
+    """
     request_queue_cancel()
-    return {"info": "已请求停止，当前任务完成后将停止执行。"}
+    return {"info": "已请求停止，正在中断当前任务…"}
 
 
 def run_execute_queue(progress_callback: ProgressCallback = None) -> dict[str, Any]:
     """Execute all pending queue items. Long-running; use progress_callback for UI."""
     queue = load_queue()
     has_pending = any(
-        (info := read_session_info(sid)) is not None
+        (info := read_item_info(item)) is not None
         and info.get("task_status", "") in ("pending", "")
-        for sid in queue
+        for item in queue
     )
     if not has_pending:
         return {

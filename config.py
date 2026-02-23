@@ -18,6 +18,10 @@ WORKSPACE_DIR = PROJECT_ROOT / "workspace"
 LOGS_DIR = PROJECT_ROOT / "logs"
 SDKS_DIR = PROJECT_ROOT / "sdks"
 
+# Session storage: matting and tracking use separate directories
+MATTING_SESSIONS_DIR = WORKSPACE_DIR / "matte_sessions"
+TRACKING_SESSIONS_DIR = WORKSPACE_DIR / "tracking_sessions"
+
 # SAM2.1 (image predictor for mask annotation)
 SAM2_CHECKPOINT = MODELS_DIR / "sam2" / "sam2.1_hiera_large.pt"
 SAM2_CONFIG = "configs/sam2.1/sam2.1_hiera_l.yaml"
@@ -38,6 +42,22 @@ VIDEOMAMA_OVERLAP = (
     2 if torch.backends.mps.is_available() else 0
 )
 VIDEOMAMA_SEED = 42         # random seed for reproducibility
+
+# CoTracker3 (point tracking)
+COTRACKER_CHECKPOINT = MODELS_DIR / "cotracker" / "scaled_online.pth"
+COTRACKER_OFFLINE_CHECKPOINT = MODELS_DIR / "cotracker" / "scaled_offline.pth"
+COTRACKER_WINDOW_LEN = 16
+COTRACKER_OFFLINE_WINDOW_LEN = 60
+COTRACKER_INPUT_RESO = (384, 512)  # (H, W) model input resolution
+COTRACKER_FRAME_LIMIT = 300        # max frames to process
+# CoTracker uses grid_sampler_3d which MPS does not support; fallback causes CPU-GPU
+# transfer overhead. Use CPU on MPS for more predictable performance.
+COTRACKER_USE_CPU_ON_MPS = True
+
+# SAM2 Hiera backbone uses bicubic interpolation (aten::upsample_bicubic2d) which MPS
+# does not support; it falls back to CPU and triggers UserWarning + poor performance.
+# Force CPU on MPS for consistent behavior.
+SAM2_USE_CPU_ON_MPS = False
 
 # Processing defaults
 DEFAULT_ERODE = 10

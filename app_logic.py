@@ -10,6 +10,7 @@ import json
 import logging
 import re
 import shutil
+import threading
 import unicodedata
 from datetime import datetime
 from pathlib import Path
@@ -21,6 +22,7 @@ import numpy as np
 from config import (
     DEFAULT_DILATE,
     DEFAULT_ERODE,
+    MATTING_SESSIONS_DIR,
     PROCESSING_LOG_FILE,
     VIDEOMAMA_BATCH_SIZE,
     VIDEOMAMA_OVERLAP,
@@ -175,7 +177,7 @@ def restore_session(session_id: str | None, state: dict) -> dict[str, Any]:
     frame = render_frame(loaded)
     gallery = keyframe_gallery(loaded)
     kf_info = keyframe_display(loaded)
-    session_dir = WORKSPACE_DIR / "sessions" / session_id
+    session_dir = MATTING_SESSIONS_DIR / session_id
     preview_path = session_dir / "propagation_preview.mp4"
     prop_preview = str(preview_path) if preview_path.exists() else None
     source_video = str(loaded["source_video_path"]) if loaded["source_video_path"] else None
@@ -261,7 +263,7 @@ def upload_video(video_path: str | None, state: dict) -> dict[str, Any]:
         }
 
     session_id = _make_session_id(Path(video_path).name)
-    frames_dir = WORKSPACE_DIR / "sessions" / session_id / "frames"
+    frames_dir = MATTING_SESSIONS_DIR / session_id / "frames"
     num_frames, fps = extract_frames(Path(video_path), frames_dir)
 
     state = empty_state()
@@ -270,7 +272,7 @@ def upload_video(video_path: str | None, state: dict) -> dict[str, Any]:
     state["num_frames"] = num_frames
     state["fps"] = fps
 
-    session_dir = WORKSPACE_DIR / "sessions" / session_id
+    session_dir = MATTING_SESSIONS_DIR / session_id
     source_path = Path(video_path)
     original_filename = source_path.name
     dest_path = session_dir / f"source{source_path.suffix}"
@@ -499,7 +501,7 @@ def run_propagation(
     state["propagated_masks"] = propagated
 
     log.info("生成传播预览视频...")
-    session_dir = WORKSPACE_DIR / "sessions" / state["session_id"]
+    session_dir = MATTING_SESSIONS_DIR / state["session_id"]
     preview_path = session_dir / "propagation_preview.mp4"
     preview_path.parent.mkdir(parents=True, exist_ok=True)
     writer = imageio.get_writer(str(preview_path), fps=state["fps"], quality=7)
@@ -582,8 +584,25 @@ def start_matting(
     model_type: str,
     state: dict,
     progress_callback: ProgressCallback = None,
+    cancel_event: threading.Event | None = None,
 ) -> dict[str, Any]:
-    """Run matting with the selected engine. Auto-runs propagation if needed."""
+    """Run matting with the selected engine. Auto-runs propagation if needed.
+
+    Args:
+        matting_engine: Engine name ("MatAnyone" or "VideoMaMa").
+        erode: Erosion kernel size.
+        dilate: Dilation kernel size.
+        batch_size: VideoMaMa batch size.
+        overlap: VideoMaMa overlap frames.
+        seed: VideoMaMa random seed.
+        model_type: Propagation model type.
+        state: Session state dict.
+        progress_callback: Optional progress reporter.
+        cancel_event: Optional threading.Event; if set, matting is cancelled.
+
+    Returns:
+        Dict with session_state, alpha_path, fgr_path.
+    """
     if not state["keyframes"]:
         return {
             "session_state": state,
@@ -609,7 +628,9 @@ def start_matting(
             progress_callback(frac, desc)
 
     try:
-        alpha_path, fgr_path, _ = run_matting_task(state, progress_cb)
+        alpha_path, fgr_path, _ = run_matting_task(
+            state, progress_cb, cancel_event=cancel_event,
+        )
         state["task_status"] = "done"
         save_session_state(state)
         return {

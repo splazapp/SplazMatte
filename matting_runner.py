@@ -19,6 +19,8 @@ import numpy as np
 import torch
 
 from config import (
+    MATTING_SESSIONS_DIR,
+    TRACKING_SESSIONS_DIR,
     DEFAULT_DILATE,
     DEFAULT_ERODE,
     DEFAULT_WARMUP,
@@ -28,8 +30,13 @@ from config import (
     WORKSPACE_DIR,
 )
 from pipeline.video_io import encode_video, load_all_frames_as_tensor
-from queue_models import load_queue
+from queue_models import QueueItem, load_queue
 from session_store import load_session, save_session_state
+from tracking_session_store import (
+    load_tracking_session,
+    read_tracking_session_info,
+    save_tracking_session,
+)
 from utils.notify import notify_failure, upload_and_notify
 
 log = logging.getLogger(__name__)
@@ -39,12 +46,25 @@ ProgressCallback = Callable[[float, str], None] | None
 # ---------------------------------------------------------------------------
 # Queue cancellation signal (thread-safe)
 # ---------------------------------------------------------------------------
+class MattingCancelledError(Exception):
+    """Raised when a matting task is cancelled via cancel_event."""
+
+
+class QueueCancelledError(Exception):
+    """Raised when user stops the queue; current task is aborted."""
+
+
 _cancel_event = threading.Event()
 
 
 def request_queue_cancel():
-    """Signal the running queue to stop after the current task finishes."""
+    """Signal the running queue to stop immediately (including current task)."""
     _cancel_event.set()
+
+
+def is_queue_cancelled() -> bool:
+    """Check if the user has requested queue cancellation."""
+    return _cancel_event.is_set()
 
 
 def reset_queue_cancel():
@@ -240,6 +260,7 @@ def run_matting_task(
     state: dict,
     progress_callback: ProgressCallback = None,
     progress_prefix: str = "",
+    cancel_event: threading.Event | None = None,
 ) -> tuple[Path, Path, float]:
     """Execute the full matting pipeline for a session.
 
@@ -250,9 +271,13 @@ def run_matting_task(
         state: Session state dict (must contain matting params).
         progress_callback: ``(fraction, description) -> None`` or None.
         progress_prefix: Prefix for progress descriptions (e.g. "[1/3]").
+        cancel_event: Optional threading.Event; if set, matting is cancelled.
 
     Returns:
         (alpha_path, fgr_path, processing_time)
+
+    Raises:
+        MattingCancelledError: If cancel_event is set during matting.
     """
     matting_engine = state.get("matting_engine", "MatAnyone")
     erode = int(state.get("erode", DEFAULT_ERODE))
@@ -262,10 +287,17 @@ def run_matting_task(
     seed = int(state.get("seed", VIDEOMAMA_SEED))
     model_type = state.get("model_type", "SAM2")
 
+    def _check_cancel():
+        if cancel_event and cancel_event.is_set():
+            raise MattingCancelledError()
+
     def _progress(frac: float, desc: str = ""):
+        _check_cancel()
         if progress_callback is not None:
             full = f"{progress_prefix} {desc}".strip() if progress_prefix else desc
             progress_callback(frac, full)
+
+    _check_cancel()
 
     # Auto-run propagation if not done yet
     if not state.get("propagated_masks"):
@@ -300,7 +332,7 @@ def run_matting_task(
             state, erode, dilate, _progress,
         )
 
-    session_dir = WORKSPACE_DIR / "sessions" / state["session_id"]
+    session_dir = MATTING_SESSIONS_DIR / state["session_id"]
     alpha_path = session_dir / "alpha.mp4"
     fgr_path = session_dir / "foreground.mp4"
 
@@ -334,9 +366,12 @@ def run_matting_task(
 # ---------------------------------------------------------------------------
 # Queue execution
 # ---------------------------------------------------------------------------
-def _read_session_info(session_id: str) -> dict | None:
-    """Read meta.json + state.json for a session (lightweight)."""
-    session_dir = WORKSPACE_DIR / "sessions" / session_id
+def _read_item_info(item: QueueItem) -> dict | None:
+    """Read lightweight session info for a queue item (matting or tracking)."""
+    if item["type"] == "tracking":
+        return read_tracking_session_info(item["sid"])
+    # Default: matting session
+    session_dir = MATTING_SESSIONS_DIR / item["sid"]
     meta_path = session_dir / "meta.json"
     state_path = session_dir / "state.json"
     if not meta_path.exists() or not state_path.exists():
@@ -354,6 +389,10 @@ def execute_queue(
 ) -> tuple[int, int, list[str]]:
     """Execute all pending queue items sequentially.
 
+    Re-loads the queue after each task so that newly added tasks are
+    picked up automatically without requiring another manual run.
+    Dispatches matting and tracking tasks based on the item ``type``.
+
     Args:
         progress_callback: ``(fraction, description) -> None`` or None.
 
@@ -362,64 +401,131 @@ def execute_queue(
         human-readable strings like ``"video.mp4: 12.3s"`` or
         ``"video.mp4: 失败"``.
     """
-    queue = load_queue()
-
-    # Filter to pending sessions
-    pending_sids: list[str] = []
-    for sid in queue:
-        info = _read_session_info(sid)
-        status = info.get("task_status", "") if info else ""
-        if status in ("pending", ""):
-            pending_sids.append(sid)
-
-    if not pending_sids:
-        return 0, 0, []
-
     reset_queue_cancel()
-
-    total = len(pending_sids)
-    log.info("========== 开始执行队列 (%d 个任务) ==========", total)
 
     done_count = 0
     error_count = 0
     timings: list[str] = []
+    total_processed = 0
 
-    for i, sid in enumerate(pending_sids, start=1):
+    while True:
+        queue = load_queue()
+        pending: list[QueueItem] = []
+        for item in queue:
+            info = _read_item_info(item)
+            status = info.get("task_status", "") if info else ""
+            if status in ("pending", ""):
+                pending.append(item)
+
+        if not pending:
+            break
+
         if _cancel_event.is_set():
             log.info("用户取消了队列执行")
             break
-        loaded = load_session(sid)
-        if loaded is None:
-            log.warning("Cannot load session %s, skipping", sid)
-            timings.append(f"{sid}: 加载失败")
-            error_count += 1
-            continue
 
-        video_name = loaded.get("original_filename", sid)
-        log.info(
-            "--- 任务 %d/%d: session=%s, video=%s ---",
-            i, total, sid, video_name,
-        )
+        total_remaining = len(pending)
+        total_all = total_processed + total_remaining
+        if total_processed == 0:
+            log.info("========== 开始执行队列 (%d 个任务) ==========", total_remaining)
 
-        loaded["task_status"] = "processing"
-        loaded["error_msg"] = ""
-        save_session_state(loaded)
+        item = pending[0]
+        sid = item["sid"]
+        task_type = item["type"]
+        task_num = total_processed + 1
 
-        try:
-            prefix = f"[{i}/{total}] {sid}"
-            _, _, elapsed = run_matting_task(loaded, progress_callback, prefix)
-            loaded["task_status"] = "done"
+        def _progress(frac: float, desc: str = ""):
+            if is_queue_cancelled():
+                raise QueueCancelledError("用户已停止队列执行")
+            overall = (total_processed + frac) / total_all
+            prefix = f"[{task_num}/{total_all}] {sid}"
+            full_desc = f"{prefix}: {desc}" if desc else prefix
+            if progress_callback:
+                progress_callback(overall, full_desc)
+
+        if task_type == "tracking":
+            loaded = load_tracking_session(sid)
+            if loaded is None:
+                log.warning("Cannot load tracking session %s, skipping", sid)
+                timings.append(f"{sid}: 加载失败")
+                error_count += 1
+                total_processed += 1
+                continue
+
+            video_name = loaded.get("original_filename", sid)
+            log.info(
+                "--- 任务 %d/%d [追踪]: session=%s, video=%s ---",
+                task_num, total_all, sid, video_name,
+            )
+
+            loaded["task_status"] = "processing"
+            loaded["error_msg"] = ""
+            save_tracking_session(loaded)
+
+            try:
+                from tracking_runner import run_tracking_task
+
+                _, _, elapsed = run_tracking_task(loaded, _progress)
+                loaded["task_status"] = "done"
+                save_tracking_session(loaded)
+                done_count += 1
+                timings.append(f"{video_name}: {elapsed:.1f}s")
+            except QueueCancelledError:
+                loaded["task_status"] = "pending"
+                loaded["error_msg"] = ""
+                save_tracking_session(loaded)
+                log.info("用户已停止队列，当前追踪任务已取消: %s", sid)
+                break
+            except Exception as exc:
+                loaded["task_status"] = "error"
+                loaded["error_msg"] = str(exc)
+                save_tracking_session(loaded)
+                error_count += 1
+                log.exception("追踪任务失败 (session=%s): %s", sid, exc)
+                notify_failure(sid, exc)
+                timings.append(f"{video_name}: 失败")
+        else:
+            # Matting task (default)
+            loaded = load_session(sid)
+            if loaded is None:
+                log.warning("Cannot load session %s, skipping", sid)
+                timings.append(f"{sid}: 加载失败")
+                error_count += 1
+                total_processed += 1
+                continue
+
+            video_name = loaded.get("original_filename", sid)
+            log.info(
+                "--- 任务 %d/%d [抠像]: session=%s, video=%s ---",
+                task_num, total_all, sid, video_name,
+            )
+
+            loaded["task_status"] = "processing"
+            loaded["error_msg"] = ""
             save_session_state(loaded)
-            done_count += 1
-            timings.append(f"{video_name}: {elapsed:.1f}s")
-        except Exception as exc:
-            loaded["task_status"] = "error"
-            loaded["error_msg"] = str(exc)
-            save_session_state(loaded)
-            error_count += 1
-            log.exception("任务失败 (session=%s): %s", sid, exc)
-            notify_failure(sid, exc)
-            timings.append(f"{video_name}: 失败")
+
+            try:
+                _, _, elapsed = run_matting_task(loaded, _progress)
+                loaded["task_status"] = "done"
+                save_session_state(loaded)
+                done_count += 1
+                timings.append(f"{video_name}: {elapsed:.1f}s")
+            except QueueCancelledError:
+                loaded["task_status"] = "pending"
+                loaded["error_msg"] = ""
+                save_session_state(loaded)
+                log.info("用户已停止队列，当前抠像任务已取消: %s", sid)
+                break
+            except Exception as exc:
+                loaded["task_status"] = "error"
+                loaded["error_msg"] = str(exc)
+                save_session_state(loaded)
+                error_count += 1
+                log.exception("抠像任务失败 (session=%s): %s", sid, exc)
+                notify_failure(sid, exc)
+                timings.append(f"{video_name}: 失败")
+
+        total_processed += 1
 
     log.info(
         "========== 队列执行完毕: %d 成功, %d 失败 ==========",

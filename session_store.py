@@ -13,6 +13,7 @@ import numpy as np
 from config import (
     DEFAULT_DILATE,
     DEFAULT_ERODE,
+    MATTING_SESSIONS_DIR,
     VIDEOMAMA_BATCH_SIZE,
     VIDEOMAMA_OVERLAP,
     VIDEOMAMA_SEED,
@@ -72,7 +73,7 @@ def save_session_state(state: dict) -> None:
     session_id = state.get("session_id")
     if not session_id:
         return
-    session_dir = WORKSPACE_DIR / "sessions" / session_id
+    session_dir = MATTING_SESSIONS_DIR / session_id
     if not session_dir.exists():
         return
 
@@ -134,7 +135,7 @@ def save_session_masks(state: dict) -> None:
     session_id = state.get("session_id")
     if not session_id:
         return
-    masks_dir = WORKSPACE_DIR / "sessions" / session_id / "masks"
+    masks_dir = MATTING_SESSIONS_DIR / session_id / "masks"
     masks_dir.mkdir(parents=True, exist_ok=True)
 
     keyframes: dict = state.get("keyframes", {})
@@ -159,7 +160,7 @@ def save_propagated_masks(state: dict) -> None:
     propagated: dict = state.get("propagated_masks", {})
     if not propagated:
         return
-    masks_dir = WORKSPACE_DIR / "sessions" / session_id / "masks"
+    masks_dir = MATTING_SESSIONS_DIR / session_id / "masks"
     masks_dir.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(
         masks_dir / "propagated.npz",
@@ -176,8 +177,8 @@ def load_session(session_id: str) -> dict | None:
     Reads meta.json, state.json, keyframe masks, current_mask, and
     propagated masks. Returns None if the session directory is invalid.
     """
-    sessions_root = (WORKSPACE_DIR / "sessions").resolve()
-    session_dir = (WORKSPACE_DIR / "sessions" / session_id).resolve()
+    sessions_root = MATTING_SESSIONS_DIR.resolve()
+    session_dir = (MATTING_SESSIONS_DIR / session_id).resolve()
     if not session_dir.is_relative_to(sessions_root):
         return None
 
@@ -290,7 +291,7 @@ def list_sessions() -> list[tuple[str, str]]:
         List of (label, session_id) tuples sorted by modification time
         (newest first). Label format: ``{session_id} ({original_filename})``.
     """
-    sessions_dir = WORKSPACE_DIR / "sessions"
+    sessions_dir = MATTING_SESSIONS_DIR
     if not sessions_dir.exists():
         return []
 
@@ -319,7 +320,7 @@ def read_session_status(session_id: str) -> dict:
     Returns a dict with task_status, original_filename, matting_engine,
     and num_frames. Returns defaults if the session is unreadable.
     """
-    session_dir = WORKSPACE_DIR / "sessions" / session_id
+    session_dir = MATTING_SESSIONS_DIR / session_id
     result = {
         "task_status": "",
         "original_filename": "",
