@@ -101,3 +101,23 @@ def draw_frame_number(image: np.ndarray, frame_idx: int) -> np.ndarray:
     )
     cv2.putText(out, text, (x, y), font, font_scale, (255, 255, 255), thickness)
     return out
+
+
+def fit_to_box(h: int, w: int, max_h: int, max_w: int) -> tuple[int, int]:
+    """Compute (height, width) scaled down to fit within max_h x max_w.
+
+    Preserves aspect ratio. Never upscales.
+
+    Args:
+        h: Original height.
+        w: Original width.
+        max_h: Maximum allowed height.
+        max_w: Maximum allowed width.
+
+    Returns:
+        (height, width) tuple scaled to fit within the box.
+    """
+    if h <= max_h and w <= max_w:
+        return h, w
+    scale = min(max_h / h, max_w / w)
+    return int(h * scale), int(w * scale)

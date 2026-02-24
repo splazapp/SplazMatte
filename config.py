@@ -65,6 +65,8 @@ DEFAULT_DILATE = 10
 DEFAULT_WARMUP = 10
 MAX_VIDEO_DURATION = 60  # seconds
 MAX_VIDEO_SHORT_SIDE = 1080
+PREVIEW_MAX_W = int(os.environ.get("SPLAZMATTE_PREVIEW_MAX_W", "800"))
+PREVIEW_MAX_H = int(os.environ.get("SPLAZMATTE_PREVIEW_MAX_H", "800"))
 
 # Cloudflare R2 (all values from environment variables)
 R2_ENDPOINT = os.environ.get("SPLAZMATTE_R2_ENDPOINT", "")

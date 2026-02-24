@@ -19,17 +19,17 @@ import numpy as np
 
 from config import (
     COTRACKER_INPUT_RESO,
+    PREVIEW_MAX_H,
+    PREVIEW_MAX_W,
     TRACKING_SESSIONS_DIR,
     WORKSPACE_DIR,
 )
 from pipeline.video_io import extract_frames, load_frame
-from utils.mask_utils import draw_points, overlay_mask
+from utils.mask_utils import draw_points, fit_to_box, overlay_mask
 
 log = logging.getLogger(__name__)
 
 ProgressCallback = Callable[[float, str], None] | None
-
-PREVIEW_WIDTH = 768
 
 
 def empty_tracking_state() -> dict[str, Any]:
@@ -139,8 +139,7 @@ def preprocess_video(video_path: str, state: dict) -> dict[str, Any]:
     frame0 = load_frame(frames_dir, 0)
     H, W = frame0.shape[:2]
 
-    new_height = int(PREVIEW_WIDTH * H / W)
-    new_width = PREVIEW_WIDTH
+    new_height, new_width = fit_to_box(H, W, PREVIEW_MAX_H, PREVIEW_MAX_W)
     input_H, input_W = COTRACKER_INPUT_RESO
 
     preview_frames = []
@@ -321,16 +320,16 @@ def add_point(x: float, y: float, state: dict) -> dict[str, Any]:
         return {"session_state": state}
 
     frame_idx = state["current_frame"]
-    query_count = state["query_count"]
+    color_idx = len(state["query_points"][frame_idx])
 
     import matplotlib
     cmap = matplotlib.colormaps.get_cmap("gist_rainbow")
-    color = cmap(query_count % 20 / 20)
+    color = cmap(color_idx % 20 / 20)
     color_rgb = (int(color[0] * 255), int(color[1] * 255), int(color[2] * 255))
 
     state["query_points"][frame_idx].append((x, y, frame_idx))
     state["query_colors"][frame_idx].append(color_rgb)
-    state["query_count"] += 1
+    state["query_count"] = _effective_point_count(state)
 
     preview = _get_preview_frame(state, frame_idx)
     for pt, col in zip(
@@ -364,7 +363,7 @@ def undo_point(state: dict) -> dict[str, Any]:
 
     state["query_points"][frame_idx].pop()
     state["query_colors"][frame_idx].pop()
-    state["query_count"] -= 1
+    state["query_count"] = _effective_point_count(state)
 
     preview = _get_preview_frame(state, frame_idx)
     for pt, col in zip(
@@ -393,10 +392,9 @@ def clear_frame_points(state: dict) -> dict[str, Any]:
         return {"session_state": state}
 
     frame_idx = state["current_frame"]
-    removed = len(state["query_points"][frame_idx])
     state["query_points"][frame_idx] = []
     state["query_colors"][frame_idx] = []
-    state["query_count"] -= removed
+    state["query_count"] = _effective_point_count(state)
 
     preview = _get_preview_frame(state, frame_idx)
 
@@ -421,15 +419,26 @@ def clear_all_points(state: dict) -> dict[str, Any]:
 
     state["query_points"] = [[] for _ in range(state["num_frames"])]
     state["query_colors"] = [[] for _ in range(state["num_frames"])]
-    state["query_count"] = 0
+    state["query_count"] = _effective_point_count(state)
 
     preview = _get_preview_frame(state, state["current_frame"])
 
     return {
         "session_state": state,
         "preview_frame": preview,
-        "query_count": 0,
+        "query_count": state["query_count"],
     }
+
+
+def _effective_point_count(state: dict) -> int:
+    """Return the number of tracking points that will actually be used when running.
+
+    Mirrors the logic in run_tracking: keyframes take priority over query_points.
+    """
+    keyframes = state.get("keyframes", {})
+    if keyframes:
+        return sum(len(kf["points"]) for kf in keyframes.values())
+    return sum(len(pts) for pts in state.get("query_points", []))
 
 
 # ---------------------------------------------------------------------------
@@ -679,14 +688,15 @@ def generate_points_from_mask(
     import matplotlib
     cmap = matplotlib.colormaps.get_cmap("gist_rainbow")
 
-    for pt in inside:
+    color_offset = len(state["query_points"][frame_idx])
+    for i, pt in enumerate(inside):
         x, y = float(pt[0]), float(pt[1])
-        color = cmap(state["query_count"] % 20 / 20)
+        color = cmap((color_offset + i) % 20 / 20)
         color_rgb = (int(color[0] * 255), int(color[1] * 255), int(color[2] * 255))
         state["query_points"][frame_idx].append((x, y, frame_idx))
         state["query_colors"][frame_idx].append(color_rgb)
-        state["query_count"] += 1
 
+    state["query_count"] = _effective_point_count(state)
     log.info("Generated %d tracking points from mask (grid %d)", len(inside), grid_size)
 
     preview = _render_sam_preview(state)
@@ -735,12 +745,14 @@ def save_tracking_keyframe(state: dict) -> dict[str, Any]:
         "points": [tuple(p) for p in pts],
         "colors": [tuple(c) for c in cols],
     }
+    state["query_count"] = _effective_point_count(state)
     log.info("Saved tracking keyframe at frame %d (%d points)", idx, len(pts))
 
     return {
         "session_state": state,
         "keyframe_info": tracking_keyframe_display(state),
         "keyframe_gallery": tracking_keyframe_gallery(state),
+        "query_count": state["query_count"],
         "notify": ("positive", f"关键帧已保存: 帧 {idx} ({len(pts)} 个点)"),
     }
 
@@ -768,9 +780,7 @@ def delete_tracking_keyframe(state: dict) -> dict[str, Any]:
     state["query_points"][idx] = []
     state["query_colors"][idx] = []
 
-    # Recount total query points from remaining keyframes
-    total = sum(len(kf["points"]) for kf in state["keyframes"].values())
-    state["query_count"] = total
+    state["query_count"] = _effective_point_count(state)
 
     log.info("Deleted tracking keyframe at frame %d", idx)
 

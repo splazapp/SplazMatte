@@ -16,6 +16,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
+import cv2
 import imageio
 import numpy as np
 
@@ -23,6 +24,8 @@ from config import (
     DEFAULT_DILATE,
     DEFAULT_ERODE,
     MATTING_SESSIONS_DIR,
+    PREVIEW_MAX_H,
+    PREVIEW_MAX_W,
     PROCESSING_LOG_FILE,
     VIDEOMAMA_BATCH_SIZE,
     VIDEOMAMA_OVERLAP,
@@ -39,7 +42,7 @@ from session_store import (
     save_session_masks,
     save_session_state,
 )
-from utils.mask_utils import draw_frame_number, draw_points, overlay_mask
+from utils.mask_utils import draw_frame_number, draw_points, fit_to_box, overlay_mask
 from utils.notify import notify_failure
 
 log = logging.getLogger(__name__)
@@ -110,12 +113,29 @@ def _make_session_id(video_filename: str) -> str:
 # Display helpers
 # ---------------------------------------------------------------------------
 def render_frame(state: dict) -> np.ndarray:
-    """Render the current frame with mask overlay and click points."""
+    """Render the current frame with mask overlay and click points.
+
+    Returns a preview-sized image (fit within PREVIEW_MAX_W x PREVIEW_MAX_H).
+    Click points in state are in original-resolution space; they are scaled
+    to preview space only for drawing.
+    """
     frame = load_frame(state["frames_dir"], state["current_frame_idx"])
     if state["current_mask"] is not None:
         frame = overlay_mask(frame, state["current_mask"])
+
+    orig_h, orig_w = frame.shape[:2]
+    prev_h, prev_w = fit_to_box(orig_h, orig_w, PREVIEW_MAX_H, PREVIEW_MAX_W)
+    if (prev_h, prev_w) != (orig_h, orig_w):
+        frame = cv2.resize(frame, (prev_w, prev_h), interpolation=cv2.INTER_LINEAR)
+
     if state["click_points"]:
-        frame = draw_points(frame, state["click_points"], state["click_labels"])
+        scale_x = prev_w / orig_w
+        scale_y = prev_h / orig_h
+        preview_pts = [
+            [int(round(px * scale_x)), int(round(py * scale_y))]
+            for px, py in state["click_points"]
+        ]
+        frame = draw_points(frame, preview_pts, state["click_labels"])
     return frame
 
 
@@ -365,11 +385,21 @@ def slider_change(frame_idx: int, state: dict) -> dict[str, Any]:
 
 
 def frame_click(x: float, y: float, point_mode: str, model_type: str, state: dict) -> dict[str, Any]:
-    """Add a click point, run SAM prediction, update mask."""
+    """Add a click point, run SAM prediction, update mask.
+
+    x, y are in preview image space. They are mapped to original resolution
+    before storing and SAM inference.
+    """
     if state["frames_dir"] is None:
         return {"session_state": state, "frame_image": None}
 
-    ix, iy = int(round(x)), int(round(y))
+    orig_w, orig_h = state["video_width"], state["video_height"]
+    if orig_w == 0 or orig_h == 0:
+        return {"session_state": state, "frame_image": None}
+    prev_h, prev_w = fit_to_box(orig_h, orig_w, PREVIEW_MAX_H, PREVIEW_MAX_W)
+    ix = int(round(x * orig_w / prev_w))
+    iy = int(round(y * orig_h / prev_h))
+
     label = 1 if point_mode == "Positive" else 0
     state["click_points"].append([ix, iy])
     state["click_labels"].append(label)

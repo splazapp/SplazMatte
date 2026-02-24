@@ -1516,6 +1516,8 @@ def tracking_page(client):
                     refs["tracking_kf_info"].set_text(out["keyframe_info"])
                 if out.get("keyframe_gallery") is not None:
                     _refresh_gallery(refs["tracking_kf_gallery"], out["keyframe_gallery"], user_id, _jump_to_tracking_frame)
+                if "query_count" in out:
+                    refs["point_count_label"].set_text(f"已选择 {out['query_count']} 个追踪点")
                 await run.io_bound(ct_save_session, page_state["tracking"])
 
             async def on_del_tracking_kf():
