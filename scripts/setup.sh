@@ -15,6 +15,32 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # ---------------------------------------------------------------------------
+# Clone required external SDKs
+# ---------------------------------------------------------------------------
+SDKS_DIR="$PROJECT_ROOT/sdks"
+mkdir -p "$SDKS_DIR"
+
+# repo_url -> local_dir_name -> pinned_commit (empty = use default branch HEAD)
+SDK_REPOS=(
+    "https://github.com/facebookresearch/co-tracker.git|co-tracker|82e02e8"
+)
+
+for entry in "${SDK_REPOS[@]}"; do
+    IFS='|' read -r repo_url dir_name pinned_commit <<< "$entry"
+    target="$SDKS_DIR/$dir_name"
+    if [ -d "$target/.git" ]; then
+        echo "[INFO] SDK '$dir_name' already cloned. Skipping."
+    else
+        echo "[INFO] Cloning $repo_url into sdks/$dir_name ..."
+        git clone "$repo_url" "$target"
+        if [ -n "$pinned_commit" ]; then
+            echo "[INFO] Checking out pinned commit $pinned_commit for $dir_name"
+            git -C "$target" checkout "$pinned_commit"
+        fi
+    fi
+done
+
+# ---------------------------------------------------------------------------
 # Parse args
 # ---------------------------------------------------------------------------
 PLATFORM=""
