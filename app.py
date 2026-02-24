@@ -472,20 +472,27 @@ def main_page(client):
             ui.label(f"运行设备: {device_label.get(device.type, device.type)} | 主机: {hostname}").classes("text-sm text-gray-600")
     
     # GPU status polling
+    _last_gpu_text = ""
+
     def update_gpu_status():
+        nonlocal _last_gpu_text
         status = get_gpu_status()
         if status["locked"]:
             if status["holder_id"] == user_id:
-                gpu_status_label.set_text(f"GPU: 您正在使用 ({status['operation']})")
-                gpu_status_label.classes(remove="text-red-500 text-green-500", add="text-blue-500")
+                text = f"GPU: 您正在使用 ({status['operation']})"
+                remove, add = "text-red-500 text-green-500", "text-blue-500"
             else:
-                gpu_status_label.set_text(f"GPU: {status['holder_name']} 使用中")
-                gpu_status_label.classes(remove="text-blue-500 text-green-500", add="text-red-500")
+                text = f"GPU: {status['holder_name']} 使用中"
+                remove, add = "text-blue-500 text-green-500", "text-red-500"
         else:
-            gpu_status_label.set_text("GPU: 空闲")
-            gpu_status_label.classes(remove="text-red-500 text-blue-500", add="text-green-500")
+            text = "GPU: 空闲"
+            remove, add = "text-red-500 text-blue-500", "text-green-500"
+        if text != _last_gpu_text:
+            _last_gpu_text = text
+            gpu_status_label.set_text(text)
+            gpu_status_label.classes(remove=remove, add=add)
     _start_page_timer(1.0, update_gpu_status)
-    
+
     ui.separator()
 
     # ======================================================================
@@ -890,16 +897,18 @@ def main_page(client):
         log_display = ui.textarea(value="暂无日志").props("readonly outlined autogrow").classes("w-full font-mono text-xs")
         refs["log_display"] = log_display
 
+        _last_log_content = ""
+
         def poll_log():
+            nonlocal _last_log_content
+            content = ""
             if PROCESSING_LOG_FILE.exists():
-                content = PROCESSING_LOG_FILE.read_text()
-                if content.strip():
-                    log_display.value = content
-                else:
-                    log_display.value = "暂无日志"
-            else:
-                log_display.value = "暂无日志"
-        _start_page_timer(0.5, poll_log)
+                content = PROCESSING_LOG_FILE.read_text().strip()
+            display = content if content else "暂无日志"
+            if display != _last_log_content:
+                _last_log_content = display
+                log_display.value = display
+        _start_page_timer(2.0, poll_log)
 
     matting_cancel_event: threading.Event | None = None
 
@@ -1231,8 +1240,14 @@ def main_page(client):
         _apply_notify(out)
 
     # Auto-refresh queue UI for multi-user visibility
+    _last_queue_rows: list[dict] = []
+
     def auto_refresh_queue():
-        _update_queue_ui(refs)
+        nonlocal _last_queue_rows
+        rows = _build_queue_rows_with_sid()
+        if rows != _last_queue_rows:
+            _last_queue_rows = rows
+            _update_queue_ui(refs)
     _start_page_timer(3.0, auto_refresh_queue)
     
     _update_queue_ui(refs)
@@ -1329,18 +1344,25 @@ def tracking_page(client):
             ui.label(f"运行设备: {device_label.get(device.type, device.type)} | 主机: {hostname}").classes("text-sm text-gray-600")
 
     # GPU status polling
+    _last_gpu_text = ""
+
     def update_gpu_status():
+        nonlocal _last_gpu_text
         status = get_gpu_status()
         if status["locked"]:
             if status["holder_id"] == user_id:
-                gpu_status_label.set_text(f"GPU: 您正在使用 ({status['operation']})")
-                gpu_status_label.classes(remove="text-red-500 text-green-500", add="text-blue-500")
+                text = f"GPU: 您正在使用 ({status['operation']})"
+                remove, add = "text-red-500 text-green-500", "text-blue-500"
             else:
-                gpu_status_label.set_text(f"GPU: {status['holder_name']} 使用中")
-                gpu_status_label.classes(remove="text-blue-500 text-green-500", add="text-red-500")
+                text = f"GPU: {status['holder_name']} 使用中"
+                remove, add = "text-blue-500 text-green-500", "text-red-500"
         else:
-            gpu_status_label.set_text("GPU: 空闲")
-            gpu_status_label.classes(remove="text-red-500 text-blue-500", add="text-green-500")
+            text = "GPU: 空闲"
+            remove, add = "text-red-500 text-blue-500", "text-green-500"
+        if text != _last_gpu_text:
+            _last_gpu_text = text
+            gpu_status_label.set_text(text)
+            gpu_status_label.classes(remove=remove, add=add)
     _start_page_timer(1.0, update_gpu_status)
 
     ui.separator()
@@ -2081,8 +2103,14 @@ def tracking_page(client):
         _apply_notify(out)
 
     # Auto-refresh queue UI
+    _last_tracking_queue_rows: list[dict] = []
+
     def auto_refresh_tracking_queue():
-        _update_tracking_queue_ui(refs)
+        nonlocal _last_tracking_queue_rows
+        rows = _build_queue_rows_with_sid()
+        if rows != _last_tracking_queue_rows:
+            _last_tracking_queue_rows = rows
+            _update_tracking_queue_ui(refs)
     _start_page_timer(3.0, auto_refresh_tracking_queue)
 
     _update_tracking_queue_ui(refs)

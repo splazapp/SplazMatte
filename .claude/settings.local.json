@@ -2,7 +2,12 @@
   "permissions": {
     "allow": [
       "Bash(python -c:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(git submodule status:*)",
+      "Bash(git -C /Users/wangtong/Projects/Splat/SplatCodes/SplazMatte ls-files:*)",
+      "Bash(git -C /Users/wangtong/Projects/Splat/SplatCodes/SplazMatte ls-tree:*)",
+      "Bash(git -C /Users/wangtong/Projects/Splat/SplatCodes/SplazMatte/sdks/co-tracker log --oneline -1)",
+      "Bash(git --version)"
     ]
   }
 }
