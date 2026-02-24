@@ -22,6 +22,12 @@ def overlay_mask(
         RGB uint8 array (H, W, 3) with mask overlaid.
     """
     out = image.copy()
+    if mask.shape[:2] != image.shape[:2]:
+        mask = cv2.resize(
+            mask.astype(np.float32),
+            (image.shape[1], image.shape[0]),
+            interpolation=cv2.INTER_NEAREST,
+        )
     binary = mask > 0.5
     color_arr = np.array(color, dtype=np.float32)
     out[binary] = (
