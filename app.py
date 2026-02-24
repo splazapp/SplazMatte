@@ -2130,4 +2130,4 @@ if __name__ == "__main__":
     log.info("SplazMatte 已启动，等待操作...")
     app.on_startup(_notify_startup)
     log.info("Launching NiceGUI (port=%s)...", SERVER_PORT)
-    ui.run(host="0.0.0.0", port=SERVER_PORT, title="SplazMatte", reload=False, show=False, storage_secret=STORAGE_SECRET)
+    ui.run(host="0.0.0.0", port=SERVER_PORT, title="SplazMatte", reload=False, show=False, storage_secret=STORAGE_SECRET, reconnect_timeout=60)
