@@ -37,12 +37,15 @@ logging.basicConfig(
     datefmt=_LOG_DATEFMT,
 )
 _user_filter = UserEmailFilter()
-logging.getLogger().addFilter(_user_filter)
+# 把 filter 加到每个 handler 上，确保所有 record 在格式化前都注入 user_email
+for _h in logging.getLogger().handlers:
+    _h.addFilter(_user_filter)
 
 PROCESSING_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
 PROCESSING_LOG_FILE.touch()
 _file_handler = logging.FileHandler(str(PROCESSING_LOG_FILE), mode="w")
 _file_handler.setFormatter(logging.Formatter(_LOG_FMT, datefmt=_LOG_DATEFMT))
+_file_handler.addFilter(_user_filter)
 logging.getLogger().addHandler(_file_handler)
 LOGS_DIR.mkdir(parents=True, exist_ok=True)
 _persistent_handler = RotatingFileHandler(
@@ -50,6 +53,7 @@ _persistent_handler = RotatingFileHandler(
     maxBytes=5_000_000, backupCount=5, encoding="utf-8",
 )
 _persistent_handler.setFormatter(logging.Formatter(_LOG_FMT, datefmt=_LOG_DATEFMT))
+_persistent_handler.addFilter(_user_filter)
 logging.getLogger().addHandler(_persistent_handler)
 log = logging.getLogger(__name__)
 

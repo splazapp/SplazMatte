@@ -185,12 +185,15 @@ def matting_page(client):
                     save_fn = e.file.save(str(dest))
                     if asyncio.iscoroutine(save_fn):
                         await save_fn
+                    loading_note = ui.notification("正在预处理视频…", type="ongoing", timeout=None, spinner=True)
                     try:
-                        out = upload_video(str(dest), page_state["session"])
+                        out = await run.io_bound(upload_video, str(dest), page_state["session"])
                     except Exception as ex:
+                        loading_note.dismiss()
                         log.exception("Upload video failed")
                         ui.notify(f"视频处理失败: {ex}", type="negative")
                         return
+                    loading_note.dismiss()
                     page_state["session"] = out["session_state"]
                     if page_state["session"].get("session_id"):
                         save_session_id(page_state["session"]["session_id"])
