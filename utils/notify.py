@@ -6,7 +6,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from config import DEFAULT_WARMUP
+from config import DEFAULT_MATTING_ENGINE, DEFAULT_WARMUP
 from utils.feishu_notify import send_feishu_failure, send_feishu_success
 from utils.storage import upload_session
 
@@ -75,7 +75,7 @@ def upload_and_notify(
         start_time=start_time,
         end_time=end_time,
         cdn_urls=cdn_urls,
-        matting_engine=state.get("matting_engine", "MatAnyone"),
+        matting_engine=state.get("matting_engine", DEFAULT_MATTING_ENGINE),
         model_type=state.get("model_type", "SAM2"),
         batch_size=state.get("batch_size", 0),
         overlap=state.get("overlap", 0),

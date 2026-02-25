@@ -77,7 +77,7 @@ class MatAnyoneEngine:
     @torch.inference_mode()
     def process(
         self,
-        frames: torch.Tensor,
+        frames_dir: Path,
         keyframe_masks: dict[int, np.ndarray],
         erode: int = 10,
         dilate: int = 10,
@@ -86,8 +86,11 @@ class MatAnyoneEngine:
     ) -> tuple[np.ndarray, np.ndarray]:
         """Run matting with keyframe masks injected at specified frames.
 
+        Frames are loaded one at a time from disk to avoid pre-allocating
+        a full-video tensor in memory.
+
         Args:
-            frames: (T, C, H, W) float tensor, pixel values in [0, 255].
+            frames_dir: Directory containing JPEG frames (000001.jpg, ...).
             keyframe_masks: {frame_idx: mask_array (H, W) uint8 0/255}.
             erode: Erosion kernel size for masks.
             dilate: Dilation kernel size for masks.
@@ -109,6 +112,12 @@ class MatAnyoneEngine:
 
         first_kf = sorted_kf_indices[0]
 
+        # Discover all frame paths (1-indexed filenames)
+        frame_paths = sorted(frames_dir.glob("*.jpg"))
+        total_frames = len(frame_paths)
+        active_count = total_frames - first_kf
+        total_len = warmup + active_count
+
         # Prepare masks: apply erode/dilate and convert to tensors
         kf_masks_tensor: dict[int, torch.Tensor] = {}
         for idx, mask_np in keyframe_masks.items():
@@ -119,13 +128,12 @@ class MatAnyoneEngine:
                 m = _gen_erode(m, erode)
             kf_masks_tensor[idx] = torch.from_numpy(m).float().to(self.device)
 
-        # Build the frame sequence: prepend warmup copies of the first keyframe
-        first_kf_frame = frames[first_kf].unsqueeze(0)
-        warmup_frames = first_kf_frame.repeat(warmup, 1, 1, 1)
-        # Only process from first_kf onward
-        active_frames = frames[first_kf:]
-        all_frames = torch.cat([warmup_frames, active_frames], dim=0).float()
-        total_len = all_frames.shape[0]
+        # Load the first keyframe image once; it is reused during the warmup
+        # region without allocating additional copies.
+        first_kf_raw = cv2.imread(str(frame_paths[first_kf]))
+        if first_kf_raw is None:
+            raise FileNotFoundError(f"Frame not found: {frame_paths[first_kf]}")
+        first_kf_rgb = cv2.cvtColor(first_kf_raw, cv2.COLOR_BGR2RGB)  # (H, W, 3) uint8
 
         # Green background for foreground composite
         bgr = (
@@ -137,16 +145,24 @@ class MatAnyoneEngine:
         fgrs_list: list[np.ndarray] = []
 
         for ti in tqdm(range(total_len), desc="抠像推理", unit="帧"):
-            image = all_frames[ti]
-            image_np = image.permute(1, 2, 0).numpy()
-            image_norm = (image / 255.0).float().to(self.device)
+            # Map ti to original frame index and load the corresponding frame.
+            # ti in [0, warmup) -> warmup region: reuse first keyframe image
+            # ti >= warmup        -> original_idx = first_kf + (ti - warmup)
+            if ti < warmup:
+                original_idx = None
+                image_np = first_kf_rgb.astype(np.float32)  # (H, W, 3) in [0, 255]
+            else:
+                original_idx = first_kf + (ti - warmup)
+                raw = cv2.imread(str(frame_paths[original_idx]))
+                if raw is None:
+                    raise FileNotFoundError(f"Frame not found: {frame_paths[original_idx]}")
+                rgb = cv2.cvtColor(raw, cv2.COLOR_BGR2RGB)
+                image_np = rgb.astype(np.float32)  # (H, W, 3) in [0, 255]
 
-            # Map ti back to the original frame index
-            # ti in [0, warmup) -> warmup region (first keyframe)
-            # ti >= warmup -> original_idx = first_kf + (ti - warmup)
-            original_idx = first_kf + (ti - warmup) if ti >= warmup else None
+            image_norm = (
+                torch.from_numpy(image_np).permute(2, 0, 1) / 255.0
+            ).float().to(self.device)  # (C, H, W) in [0, 1]
 
-            # Check if this is a keyframe (in original frame indices)
             is_keyframe = original_idx is not None and original_idx in kf_masks_tensor
 
             if ti == 0:
@@ -154,7 +170,7 @@ class MatAnyoneEngine:
                 mask = kf_masks_tensor[first_kf]
                 processor.step(image_norm, mask, objects=objects)
                 output_prob = processor.step(image_norm, first_frame_pred=True)
-            elif ti <= warmup:
+            elif ti < warmup:
                 # Warmup region: keep re-initializing (matches reference behavior)
                 output_prob = processor.step(image_norm, first_frame_pred=True)
             elif is_keyframe and original_idx != first_kf:

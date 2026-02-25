@@ -23,6 +23,7 @@ import numpy as np
 from config import (
     DEFAULT_DILATE,
     DEFAULT_ERODE,
+    DEFAULT_MATTING_ENGINE,
     MATTING_SESSIONS_DIR,
     PREVIEW_MAX_H,
     PREVIEW_MAX_W,
@@ -210,7 +211,7 @@ def restore_session(session_id: str | None, state: dict) -> dict[str, Any]:
     fgr_path = session_dir / "foreground.mp4"
     alpha_video = str(alpha_path) if alpha_path.exists() else None
     fgr_video = str(fgr_path) if fgr_path.exists() else None
-    is_ma = loaded.get("matting_engine", "MatAnyone") == "MatAnyone"
+    is_ma = loaded.get("matting_engine", DEFAULT_MATTING_ENGINE) == "MatAnyone"
 
     log.info("Restored session from disk: %s", session_id)
     return {
@@ -226,7 +227,7 @@ def restore_session(session_id: str | None, state: dict) -> dict[str, Any]:
         "model_type": loaded["model_type"],
         "text_prompt_visible": loaded["model_type"] == "SAM3",
         "propagation_preview_path": prop_preview,
-        "matting_engine": loaded.get("matting_engine", "MatAnyone"),
+        "matting_engine": loaded.get("matting_engine", DEFAULT_MATTING_ENGINE),
         "erode": loaded.get("erode", DEFAULT_ERODE),
         "dilate": loaded.get("dilate", DEFAULT_DILATE),
         "batch_size": loaded.get("batch_size", VIDEOMAMA_BATCH_SIZE),
@@ -253,7 +254,7 @@ def _no_restore_out(state: dict) -> dict[str, Any]:
         "model_type": state.get("model_type", "SAM2"),
         "text_prompt_visible": False,
         "propagation_preview_path": None,
-        "matting_engine": state.get("matting_engine", "MatAnyone"),
+        "matting_engine": state.get("matting_engine", DEFAULT_MATTING_ENGINE),
         "erode": state.get("erode", DEFAULT_ERODE),
         "dilate": state.get("dilate", DEFAULT_DILATE),
         "batch_size": state.get("batch_size", VIDEOMAMA_BATCH_SIZE),

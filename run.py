@@ -16,7 +16,7 @@ import argparse
 import logging
 import sys
 
-from config import PROCESSING_LOG_FILE, WORKSPACE_DIR
+from config import DEFAULT_MATTING_ENGINE, PROCESSING_LOG_FILE, WORKSPACE_DIR
 
 
 def _setup_logging():
@@ -86,7 +86,7 @@ def cmd_session(args):
         f"Session: {session_id}\n"
         f"  Video: {state['original_filename']}\n"
         f"  Frames: {state['num_frames']}  Keyframes: {len(state['keyframes'])}\n"
-        f"  Engine: {state.get('matting_engine', 'MatAnyone')}"
+        f"  Engine: {state.get('matting_engine', DEFAULT_MATTING_ENGINE)}"
     )
 
     state["task_status"] = "processing"

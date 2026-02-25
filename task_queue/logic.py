@@ -16,6 +16,7 @@ from config import (
     TRACKING_SESSIONS_DIR,
     DEFAULT_DILATE,
     DEFAULT_ERODE,
+    DEFAULT_MATTING_ENGINE,
     VIDEOMAMA_BATCH_SIZE,
     VIDEOMAMA_OVERLAP,
     VIDEOMAMA_SEED,
@@ -111,7 +112,7 @@ def queue_table_rows(queue: list[QueueItem]) -> list[list]:
             total_pts = info.get("total_points", 0)
             mode = f"点x{total_pts}"
         else:
-            engine = info.get("matting_engine", "MatAnyone")
+            engine = info.get("matting_engine", DEFAULT_MATTING_ENGINE)
             mode = "MA" if engine == "MatAnyone" else "VM"
         rows.append([i, type_label, video_name, num_frames, len(kf_indices), mode, status])
     return rows
@@ -344,7 +345,7 @@ def _restore_matting_item(
     fgr_path = session_dir / "foreground.mp4"
     alpha_video = str(alpha_path) if alpha_path.exists() else None
     fgr_video = str(fgr_path) if fgr_path.exists() else None
-    is_ma = loaded.get("matting_engine", "MatAnyone") == "MatAnyone"
+    is_ma = loaded.get("matting_engine", DEFAULT_MATTING_ENGINE) == "MatAnyone"
 
     log.info("Restored matting queue item for editing: session=%s", sid)
 
@@ -365,7 +366,7 @@ def _restore_matting_item(
         "model_type": loaded["model_type"],
         "text_prompt_visible": loaded["model_type"] == "SAM3",
         "propagation_preview_path": prop_preview,
-        "matting_engine": loaded.get("matting_engine", "MatAnyone"),
+        "matting_engine": loaded.get("matting_engine", DEFAULT_MATTING_ENGINE),
         "erode": loaded.get("erode", DEFAULT_ERODE),
         "dilate": loaded.get("dilate", DEFAULT_DILATE),
         "batch_size": loaded.get("batch_size", VIDEOMAMA_BATCH_SIZE),

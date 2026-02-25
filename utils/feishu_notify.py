@@ -6,7 +6,7 @@ import traceback
 
 import requests
 
-from config import FEISHU_WEBHOOK_URL, get_device
+from config import DEFAULT_MATTING_ENGINE, FEISHU_WEBHOOK_URL, get_device
 from utils.lan_ip import lan_ip as _lan_ip
 
 log = logging.getLogger(__name__)
@@ -113,7 +113,7 @@ def send_feishu_success(
     start_time: str,
     end_time: str,
     cdn_urls: dict[str, str],
-    matting_engine: str = "MatAnyone",
+    matting_engine: str = DEFAULT_MATTING_ENGINE,
     model_type: str = "SAM2",
     batch_size: int = 0,
     overlap: int = 0,

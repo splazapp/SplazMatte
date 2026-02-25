@@ -23,13 +23,14 @@ from config import (
     TRACKING_SESSIONS_DIR,
     DEFAULT_DILATE,
     DEFAULT_ERODE,
+    DEFAULT_MATTING_ENGINE,
     DEFAULT_WARMUP,
     VIDEOMAMA_BATCH_SIZE,
     VIDEOMAMA_OVERLAP,
     VIDEOMAMA_SEED,
     WORKSPACE_DIR,
 )
-from pipeline.video_io import encode_video, load_all_frames_as_tensor
+from pipeline.video_io import encode_video
 from task_queue.models import QueueItem, load_queue
 from matting.session_store import load_session, save_session_state
 from tracking.session_store import (
@@ -234,17 +235,14 @@ def run_matanyone(
     Returns:
         Tuple of (alphas, foregrounds) arrays.
     """
-    log.info("加载帧数据 (%d 帧)...", state["num_frames"])
-    frames_tensor = load_all_frames_as_tensor(state["frames_dir"])
-
-    log.info("开始 MatAnyone 推理...")
+    log.info("开始 MatAnyone 推理 (%d 帧)...", state["num_frames"])
     engine = get_matanyone()
     cb = (
         (lambda f: progress_callback(f, "MatAnyone 推理中..."))
         if progress_callback else None
     )
     return engine.process(
-        frames=frames_tensor,
+        frames_dir=Path(state["frames_dir"]),
         keyframe_masks=state["keyframes"],
         erode=erode,
         dilate=dilate,
@@ -279,7 +277,7 @@ def run_matting_task(
     Raises:
         MattingCancelledError: If cancel_event is set during matting.
     """
-    matting_engine = state.get("matting_engine", "MatAnyone")
+    matting_engine = state.get("matting_engine", DEFAULT_MATTING_ENGINE)
     erode = int(state.get("erode", DEFAULT_ERODE))
     dilate = int(state.get("dilate", DEFAULT_DILATE))
     batch_size = int(state.get("batch_size", VIDEOMAMA_BATCH_SIZE))

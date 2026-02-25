@@ -17,6 +17,7 @@ from nicegui import run
 from config import (
     DEFAULT_DILATE,
     DEFAULT_ERODE,
+    DEFAULT_MATTING_ENGINE,
     PROCESSING_LOG_FILE,
     VIDEOMAMA_BATCH_SIZE,
     VIDEOMAMA_OVERLAP,
@@ -546,7 +547,7 @@ def matting_page(client):
             ui.label("使用遮罩进行精细抠像，输出透明背景视频。").classes("text-xs text-gray-500 mb-2")
             with ui.column().classes("gap-0"):
                 ui.label("抠图引擎").classes("text-xs text-gray-500")
-                matting_engine_selector = ui.radio(["MatAnyone", "VideoMaMa"], value="MatAnyone")
+                matting_engine_selector = ui.radio(["MatAnyone", "VideoMaMa"], value=DEFAULT_MATTING_ENGINE)
                 refs["matting_engine_selector"] = matting_engine_selector
             ui.label("MatAnyone: 速度快，适合常规场景 | VideoMaMa: 效果更细腻，适合毛发等复杂边缘").classes("text-xs text-gray-400 my-1")
             erode_row = ui.row().classes("w-full")

@@ -13,6 +13,7 @@ import numpy as np
 from config import (
     DEFAULT_DILATE,
     DEFAULT_ERODE,
+    DEFAULT_MATTING_ENGINE,
     MATTING_SESSIONS_DIR,
     VIDEOMAMA_BATCH_SIZE,
     VIDEOMAMA_OVERLAP,
@@ -50,7 +51,7 @@ def empty_state() -> dict:
         "video_duration": 0.0,
         "video_width": 0,
         "video_height": 0,
-        "matting_engine": "MatAnyone",
+        "matting_engine": DEFAULT_MATTING_ENGINE,
         "erode": DEFAULT_ERODE,
         "dilate": DEFAULT_DILATE,
         "batch_size": VIDEOMAMA_BATCH_SIZE,
@@ -89,7 +90,7 @@ def save_session_state(state: dict) -> None:
         "keyframe_indices": sorted(state.get("keyframes", {}).keys()),
         "has_propagation": bool(state.get("propagated_masks")),
         "frame_clicks": serialized_fc,
-        "matting_engine": state.get("matting_engine", "MatAnyone"),
+        "matting_engine": state.get("matting_engine", DEFAULT_MATTING_ENGINE),
         "erode": state.get("erode", DEFAULT_ERODE),
         "dilate": state.get("dilate", DEFAULT_DILATE),
         "batch_size": state.get("batch_size", VIDEOMAMA_BATCH_SIZE),
@@ -217,7 +218,7 @@ def load_session(session_id: str) -> dict | None:
     state["_sam2_image_idx"] = -1
 
     # Restore matting parameters and task status
-    state["matting_engine"] = saved.get("matting_engine", "MatAnyone")
+    state["matting_engine"] = saved.get("matting_engine", DEFAULT_MATTING_ENGINE)
     state["erode"] = saved.get("erode", DEFAULT_ERODE)
     state["dilate"] = saved.get("dilate", DEFAULT_DILATE)
     state["batch_size"] = saved.get("batch_size", VIDEOMAMA_BATCH_SIZE)
