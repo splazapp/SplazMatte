@@ -57,6 +57,7 @@ from tracking.logic import (
     tracking_keyframe_display as ct_kf_display,
     tracking_keyframe_gallery as ct_kf_gallery,
 )
+from utils.user_context import set_current_user
 from tracking.session_store import (
     list_tracking_sessions,
     save_tracking_session as ct_save_session,
@@ -70,6 +71,7 @@ def tracking_page(client):
     """点追踪页面：上传视频、选择追踪点、运行追踪、导出结果。"""
     user_id = get_user_id_from_request(client.request)
     user_name = get_user_name_from_request(client.request)
+    set_current_user(user_name)
 
     page_state = {"tracking": empty_tracking_state()}
 
@@ -502,7 +504,7 @@ def tracking_page(client):
                 with ui.element("div").classes("relative w-full"):
                     tracking_frame_image = ui.interactive_image(
                         "", on_mouse=_on_tracking_mouse, events=["click"],
-                    ).classes("w-full")
+                    ).classes("max-h-[70vh] max-w-[70vw]").style("object-fit: contain")
                     refs["frame_image"] = tracking_frame_image
 
                     # 追踪加载遮罩层（推理时显示）

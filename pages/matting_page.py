@@ -60,6 +60,7 @@ from pages.shared_ui import (
     update_queue_ui,
 )
 from pages.queue_panel import build_queue_panel
+from utils.user_context import set_current_user
 
 log = logging.getLogger(__name__)
 
@@ -70,6 +71,7 @@ def matting_page(client):
     # 从请求头获取用户身份（Cloudflare Access）
     user_id = get_user_id_from_request(client.request)
     user_name = get_user_name_from_request(client.request)
+    set_current_user(user_name)
 
     # 页面级会话状态（可变字典，在当前页面实例中持久化）
     page_state = {"session": get_session_state()}
@@ -395,7 +397,7 @@ def matting_page(client):
                         click_state["busy"] = False
 
                 with ui.element("div").classes("relative w-full"):
-                    frame_image = ui.interactive_image("", on_mouse=on_mouse, events=["click"]).classes("w-full")
+                    frame_image = ui.interactive_image("", on_mouse=on_mouse, events=["click"]).classes("max-h-[70vh] max-w-[70vw]").style("object-fit: contain")
                     refs["frame_image"] = frame_image
                     # 加载遮罩层
                     loading_overlay = ui.element("div").classes(

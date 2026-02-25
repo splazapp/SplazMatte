@@ -23,30 +23,33 @@ from config import (
     WORKSPACE_DIR,
 )
 from utils.feishu_notify import send_feishu_startup
+from utils.user_context import UserEmailFilter
 
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
+_LOG_FMT = "%(asctime)s [%(levelname)s] [%(user_email)s] %(name)s: %(message)s"
+_LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
+
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    datefmt="%H:%M:%S",
+    format=_LOG_FMT,
+    datefmt=_LOG_DATEFMT,
 )
+_user_filter = UserEmailFilter()
+logging.getLogger().addFilter(_user_filter)
+
 PROCESSING_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
 PROCESSING_LOG_FILE.touch()
 _file_handler = logging.FileHandler(str(PROCESSING_LOG_FILE), mode="w")
-_file_handler.setFormatter(logging.Formatter(
-    "%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%H:%M:%S",
-))
+_file_handler.setFormatter(logging.Formatter(_LOG_FMT, datefmt=_LOG_DATEFMT))
 logging.getLogger().addHandler(_file_handler)
 LOGS_DIR.mkdir(parents=True, exist_ok=True)
 _persistent_handler = RotatingFileHandler(
     str(LOGS_DIR / "splazmatte.log"),
     maxBytes=5_000_000, backupCount=5, encoding="utf-8",
 )
-_persistent_handler.setFormatter(logging.Formatter(
-    "%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S",
-))
+_persistent_handler.setFormatter(logging.Formatter(_LOG_FMT, datefmt=_LOG_DATEFMT))
 logging.getLogger().addHandler(_persistent_handler)
 log = logging.getLogger(__name__)
 
