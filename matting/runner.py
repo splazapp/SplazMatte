@@ -30,9 +30,9 @@ from config import (
     WORKSPACE_DIR,
 )
 from pipeline.video_io import encode_video, load_all_frames_as_tensor
-from queue_models import QueueItem, load_queue
-from session_store import load_session, save_session_state
-from tracking_session_store import (
+from task_queue.models import QueueItem, load_queue
+from matting.session_store import load_session, save_session_state
+from tracking.session_store import (
     load_tracking_session,
     read_tracking_session_info,
     save_tracking_session,
@@ -463,7 +463,7 @@ def execute_queue(
             save_tracking_session(loaded)
 
             try:
-                from tracking_runner import run_tracking_task
+                from tracking.runner import run_tracking_task
 
                 _, _, elapsed = run_tracking_task(loaded, _progress)
                 loaded["task_status"] = "done"

@@ -122,7 +122,7 @@ def load_tracking_session(sid: str) -> dict | None:
     Returns:
         Full tracking state dict, or None if not loadable.
     """
-    from cotracker_logic import empty_tracking_state
+    from tracking.logic import empty_tracking_state
 
     session_dir = TRACKING_SESSIONS_DIR / sid
     meta_path = session_dir / "meta.json"

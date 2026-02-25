@@ -10,9 +10,9 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
-from cotracker_logic import run_tracking
-from tracking_export import export_ae_keyframe_data
-from tracking_session_store import save_tracking_results, save_tracking_session
+from tracking.logic import run_tracking
+from tracking.export import export_ae_keyframe_data
+from tracking.session_store import save_tracking_results, save_tracking_session
 
 log = logging.getLogger(__name__)
 

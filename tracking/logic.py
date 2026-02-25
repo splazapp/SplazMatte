@@ -180,7 +180,7 @@ def preprocess_video(video_path: str, state: dict) -> dict[str, Any]:
 
     log.info("Video loaded: %d frames, %dx%d @ %.1f fps", num_frames, W, H, fps)
 
-    from tracking_session_store import save_tracking_session
+    from tracking.session_store import save_tracking_session
     save_tracking_session(new_state)
 
     return {
@@ -194,7 +194,7 @@ def preprocess_video(video_path: str, state: dict) -> dict[str, Any]:
 
 def restore_tracking_session(session_id: str | None, state: dict) -> dict[str, Any]:
     """Restore a tracking session from disk. Returns dict for UI updates."""
-    from tracking_session_store import load_tracking_session, list_tracking_sessions
+    from tracking.session_store import load_tracking_session, list_tracking_sessions
 
     out = {
         "session_state": state,
@@ -259,7 +259,7 @@ def restore_tracking_session(session_id: str | None, state: dict) -> dict[str, A
 
 def refresh_tracking_sessions() -> dict[str, Any]:
     """Refresh tracking session dropdown choices."""
-    from tracking_session_store import list_tracking_sessions
+    from tracking.session_store import list_tracking_sessions
 
     return {"session_choices": list_tracking_sessions()}
 
@@ -447,7 +447,7 @@ def _effective_point_count(state: dict) -> int:
 # ---------------------------------------------------------------------------
 def _get_sam_engine(model_type: str):
     """Lazy-load SAM2 or SAM3 image engine (shared with app_logic)."""
-    from app_logic import _get_image_engine
+    from matting.logic import _get_image_engine
     return _get_image_engine(model_type)
 
 

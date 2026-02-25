@@ -32,9 +32,9 @@ from config import (
     VIDEOMAMA_SEED,
     WORKSPACE_DIR,
 )
-from matting_runner import get_video_engine, run_matting_task
+from matting.runner import get_video_engine, run_matting_task
 from pipeline.video_io import extract_frames, load_frame
-from session_store import (
+from matting.session_store import (
     empty_state,
     list_sessions,
     load_session,

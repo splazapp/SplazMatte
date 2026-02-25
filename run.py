@@ -66,8 +66,8 @@ def _make_progress_callback():
 
 def cmd_session(args):
     """Run matting on a single session."""
-    from matting_runner import run_matting_task
-    from session_store import load_session, save_session_state
+    from matting.runner import run_matting_task
+    from matting.session_store import load_session, save_session_state
 
     session_id = args.session_id
     state = load_session(session_id)
@@ -114,7 +114,7 @@ def cmd_session(args):
 
 def cmd_queue(args):
     """Run all pending queue tasks."""
-    from matting_runner import execute_queue
+    from matting.runner import execute_queue
 
     done, errors, timings = execute_queue(
         progress_callback=_make_progress_callback(),
@@ -134,7 +134,7 @@ def cmd_queue(args):
 
 def cmd_list(args):
     """List all sessions and their status."""
-    from session_store import list_sessions, read_session_status
+    from matting.session_store import list_sessions, read_session_status
 
     sessions = list_sessions()
     if not sessions:

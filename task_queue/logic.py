@@ -21,17 +21,17 @@ from config import (
     VIDEOMAMA_SEED,
     WORKSPACE_DIR,
 )
-from matting_runner import execute_queue, request_queue_cancel
-from queue_models import QueueItem, load_queue, save_queue
-from session_store import empty_state, load_session, save_session_state
-from tracking_session_store import (
+from matting.runner import execute_queue, request_queue_cancel
+from task_queue.models import QueueItem, load_queue, save_queue
+from matting.session_store import empty_state, load_session, save_session_state
+from tracking.session_store import (
     load_tracking_session,
     read_tracking_session_info,
     save_tracking_session,
 )
 from utils.notify import upload_and_notify
 
-from app_logic import clear_processing_log, keyframe_display, keyframe_gallery, render_frame
+from matting.logic import clear_processing_log, keyframe_display, keyframe_gallery, render_frame
 
 log = logging.getLogger(__name__)
 
@@ -205,7 +205,7 @@ def add_tracking_to_queue(
     Returns:
         Dict with session_state (reset), queue_state, queue display data.
     """
-    from cotracker_logic import empty_tracking_state
+    from tracking.logic import empty_tracking_state
 
     if not session_state.get("keyframes"):
         queue = load_queue()
@@ -392,7 +392,7 @@ def _restore_tracking_item(
             "warning": f"无法加载追踪 Session: {sid}",
         }
 
-    from cotracker_logic import tracking_keyframe_display, tracking_keyframe_gallery
+    from tracking.logic import tracking_keyframe_display, tracking_keyframe_gallery
 
     first_kf = min(loaded["keyframes"].keys()) if loaded.get("keyframes") else 0
     num_frames = loaded.get("num_frames", 0)
@@ -523,7 +523,7 @@ def send_feishu(queue_state: list[QueueItem]) -> dict[str, Any]:
                 if loaded is None:
                     failed += 1
                     continue
-                from tracking_runner import upload_and_notify_tracking
+                from tracking.runner import upload_and_notify_tracking
                 upload_and_notify_tracking(
                     loaded,
                     loaded.get("processing_time", 0.0),
