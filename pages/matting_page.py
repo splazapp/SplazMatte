@@ -131,6 +131,17 @@ def matting_page(client):
         refs["frame_slider"].value = frame_idx  # bind_value 自动同步 input
         _load_frame(frame_idx)
 
+    # 注入 CSS：覆盖 interactive_image 内部 <img> 的硬编码尺寸
+    ui.add_head_html('''<style>
+.frame-preview { max-height: 70vh; }
+.frame-preview img {
+    width: auto !important;
+    height: auto !important;
+    max-height: 70vh;
+    max-width: 100%;
+}
+</style>''')
+
     # ---- 顶部导航栏 ----
     with ui.row().classes("w-full items-center justify-between"):
         with ui.row().classes("items-center gap-4"):
@@ -237,11 +248,18 @@ def matting_page(client):
                         out = refresh_sessions()
                         refs["session_dropdown"].options = {v: l for l, v in out["session_choices"]}
                     ui.button("刷新", on_click=on_refresh)
-                    def on_restore():
+                    async def on_restore():
                         sid = refs["session_dropdown"].value
-                        out = restore_session(sid, page_state["session"])
-                        page_state["session"] = apply_restore_out(out, refs, user_id, page_state["session"], jump_to_frame)
-                        apply_notify(out)
+                        loading_note = ui.notification("正在恢复 Session…", type="ongoing", timeout=None, spinner=True)
+                        try:
+                            out = await run.io_bound(restore_session, sid, page_state["session"])
+                            page_state["session"] = apply_restore_out(out, refs, user_id, page_state["session"], jump_to_frame)
+                            apply_notify(out)
+                        except Exception as ex:
+                            log.exception("Restore session failed")
+                            ui.notify(f"恢复失败: {ex}", type="negative")
+                        finally:
+                            loading_note.dismiss()
                     ui.button("恢复", on_click=on_restore).props("color=primary")
                 ui.label("选择历史 Session 可恢复之前的标注、传播、抠像结果。").classes("text-xs text-gray-400")
 
@@ -400,7 +418,7 @@ def matting_page(client):
                         click_state["busy"] = False
 
                 with ui.element("div").classes("relative w-full"):
-                    frame_image = ui.interactive_image("", on_mouse=on_mouse, events=["click"]).classes("max-h-[70vh] max-w-[70vw]").style("object-fit: contain")
+                    frame_image = ui.interactive_image("", on_mouse=on_mouse, events=["click"]).classes("frame-preview")
                     refs["frame_image"] = frame_image
                     # 加载遮罩层
                     loading_overlay = ui.element("div").classes(

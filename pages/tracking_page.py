@@ -118,6 +118,17 @@ def tracking_page(client):
     client.on_disconnect(_cleanup_page_timers)
     client.on_delete(_cleanup_page_timers)
 
+    # 注入 CSS：覆盖 interactive_image 内部 <img> 的硬编码尺寸
+    ui.add_head_html('''<style>
+.frame-preview { max-height: 70vh; }
+.frame-preview img {
+    width: auto !important;
+    height: auto !important;
+    max-height: 70vh;
+    max-width: 100%;
+}
+</style>''')
+
     # ---- 顶部导航栏 ----
     with ui.row().classes("w-full items-center justify-between"):
         with ui.row().classes("items-center gap-4"):
@@ -222,37 +233,44 @@ def tracking_page(client):
                         refs["tracking_session_dropdown"].options = {v: l for l, v in out["session_choices"]}
                         refs["tracking_session_dropdown"].update()
                     ui.button("刷新", on_click=on_tracking_refresh)
-                    def on_tracking_restore():
+                    async def on_tracking_restore():
                         sid = refs["tracking_session_dropdown"].value
-                        out = ct_restore_session(sid, page_state["tracking"])
-                        if out.get("warning"):
-                            ui.notify(out["warning"], type="warning")
-                            return
-                        page_state["tracking"] = out["session_state"]
-                        if out.get("preview_frame") is not None:
-                            refs["frame_image"].set_source(write_tracking_preview(out["preview_frame"], user_id))
-                        if out.get("slider_max") is not None:
-                            refs["frame_slider"].props["max"] = out["slider_max"]
-                            refs["frame_slider"].value = out.get("slider_value", 0)
-                            refs["frame_slider"].set_visibility(True)
-                            refs["frame_input"].max = out["slider_max"]
-                            refs["frame_input"].value = out.get("slider_value", 0)
-                            refs["frame_input"].set_visibility(True)
-                        refs["frame_label"].set_text(out.get("frame_label", "第 0 帧 / 共 0 帧"))
-                        if out.get("keyframe_info"):
-                            refs["tracking_kf_info"].set_text(out["keyframe_info"])
-                        if out.get("keyframe_gallery") is not None:
-                            refresh_gallery(refs["tracking_kf_gallery"], out["keyframe_gallery"], user_id, _jump_to_tracking_frame)
-                        refs["point_count_label"].set_text(f"已选择 {out.get('point_count', 0)} 个追踪点")
-                        if out.get("video_path"):
-                            refs["video_display"].set_source(workspace_path_to_url(out["video_path"]))
-                        if out.get("result_video_path"):
-                            refs["result_video"].set_source(workspace_path_to_url(out["result_video_path"]))
-                        if refs.get("backward_tracking") is not None:
-                            refs["backward_tracking"].value = out.get("backward_tracking", False)
-                        if refs.get("grid_size") is not None:
-                            refs["grid_size"].value = out.get("grid_size", 15)
-                        ui.notify("Session 恢复成功", type="positive")
+                        loading_note = ui.notification("正在恢复 Session…", type="ongoing", timeout=None, spinner=True)
+                        try:
+                            out = await run.io_bound(ct_restore_session, sid, page_state["tracking"])
+                            if out.get("warning"):
+                                ui.notify(out["warning"], type="warning")
+                                return
+                            page_state["tracking"] = out["session_state"]
+                            if out.get("preview_frame") is not None:
+                                refs["frame_image"].set_source(write_tracking_preview(out["preview_frame"], user_id))
+                            if out.get("slider_max") is not None:
+                                refs["frame_slider"].props["max"] = out["slider_max"]
+                                refs["frame_slider"].value = out.get("slider_value", 0)
+                                refs["frame_slider"].set_visibility(True)
+                                refs["frame_input"].max = out["slider_max"]
+                                refs["frame_input"].value = out.get("slider_value", 0)
+                                refs["frame_input"].set_visibility(True)
+                            refs["frame_label"].set_text(out.get("frame_label", "第 0 帧 / 共 0 帧"))
+                            if out.get("keyframe_info"):
+                                refs["tracking_kf_info"].set_text(out["keyframe_info"])
+                            if out.get("keyframe_gallery") is not None:
+                                refresh_gallery(refs["tracking_kf_gallery"], out["keyframe_gallery"], user_id, _jump_to_tracking_frame)
+                            refs["point_count_label"].set_text(f"已选择 {out.get('point_count', 0)} 个追踪点")
+                            if out.get("video_path"):
+                                refs["video_display"].set_source(workspace_path_to_url(out["video_path"]))
+                            if out.get("result_video_path"):
+                                refs["result_video"].set_source(workspace_path_to_url(out["result_video_path"]))
+                            if refs.get("backward_tracking") is not None:
+                                refs["backward_tracking"].value = out.get("backward_tracking", False)
+                            if refs.get("grid_size") is not None:
+                                refs["grid_size"].value = out.get("grid_size", 15)
+                            ui.notify("Session 恢复成功", type="positive")
+                        except Exception as ex:
+                            log.exception("Restore tracking session failed")
+                            ui.notify(f"恢复失败: {ex}", type="negative")
+                        finally:
+                            loading_note.dismiss()
                     ui.button("恢复", on_click=on_tracking_restore).props("color=primary")
                 ui.label("选择历史 Session 可恢复之前的追踪点、追踪结果。").classes("text-xs text-gray-400")
 
@@ -504,7 +522,7 @@ def tracking_page(client):
                 with ui.element("div").classes("relative w-full"):
                     tracking_frame_image = ui.interactive_image(
                         "", on_mouse=_on_tracking_mouse, events=["click"],
-                    ).classes("max-h-[70vh] max-w-[70vw]").style("object-fit: contain")
+                    ).classes("frame-preview")
                     refs["frame_image"] = tracking_frame_image
 
                     # 追踪加载遮罩层（推理时显示）
