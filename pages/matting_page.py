@@ -124,19 +124,10 @@ def matting_page(client):
     client.on_delete(_cleanup_page_timers)
 
     # 跳转到指定帧（关键帧 Gallery 点击时使用）
-    async def jump_to_frame(frame_idx: int):
+    def jump_to_frame(frame_idx: int):
         """点击关键帧缩略图时跳转到指定帧。"""
-        out = await run.io_bound(slider_change, frame_idx, page_state["session"])
-        page_state["session"] = out["session_state"]
-        if out.get("frame_image") is not None:
-            refs["frame_image"].set_source(write_frame_preview(out["frame_image"], user_id))
-        if out.get("frame_label"):
-            refs["frame_label"].set_text(out["frame_label"])
-        # 同步更新滑块位置
-        if "frame_slider" in refs:
-            refs["frame_slider"].value = frame_idx
-        if "frame_input" in refs:
-            refs["frame_input"].value = frame_idx
+        refs["frame_slider"].value = frame_idx  # bind_value 自动同步 input
+        _load_frame(frame_idx)
 
     # ---- 顶部导航栏 ----
     with ui.row().classes("w-full items-center justify-between"):
@@ -326,49 +317,36 @@ def matting_page(client):
         # 帧滑块 + 帧号输入框
         with ui.row().classes("w-full items-center gap-2 mb-2"):
             frame_slider = ui.slider(min=0, max=1, value=0, step=1).props("label-always").classes("flex-1")
+            frame_slider._props['loopback'] = False
             refs["frame_slider"] = frame_slider
             frame_input = ui.number(min=0, max=1, value=0, step=1).classes("w-24").props("dense outlined")
             refs["frame_input"] = frame_input
+            frame_slider.bind_value(frame_input)
 
-        _slider_busy = {"value": False}
-        _slider_pending = {"value": None}
+        def _load_frame(frame_idx: int):
+            """加载帧并更新标签。slider/input 同步由 bind_value 处理。"""
+            out = slider_change(frame_idx, page_state["session"])
+            page_state["session"] = out["session_state"]
+            if out.get("frame_image") is not None:
+                refs["frame_image"].set_source(write_frame_preview(out["frame_image"], user_id))
+            if out.get("frame_label"):
+                refs["frame_label"].set_text(out["frame_label"])
 
-        async def on_slider_val():
-            v = refs["frame_slider"].value
-            if v is None:
-                return
-            if _slider_busy["value"]:
-                _slider_pending["value"] = v
-                return
-            _slider_busy["value"] = True
-            try:
-                current_v = v
-                while True:
-                    out = await run.io_bound(slider_change, int(current_v), page_state["session"])
-                    page_state["session"] = out["session_state"]
-                    if out.get("frame_image") is not None:
-                        refs["frame_image"].set_source(write_frame_preview(out["frame_image"], user_id))
-                    if out.get("frame_label"):
-                        refs["frame_label"].set_text(out["frame_label"])
-                    refs["frame_input"].value = int(current_v)
-                    if _slider_pending["value"] is None:
-                        break
-                    current_v = _slider_pending["value"]
-                    _slider_pending["value"] = None
-            finally:
-                _slider_busy["value"] = False
+        def on_slider_val(e):
+            v = e.args
+            if v is not None:
+                _load_frame(int(v))
 
-        frame_slider.on("update:model-value", on_slider_val)
+        frame_slider.on("update:model-value", on_slider_val, [None], throttle=0.05)
 
-        async def on_frame_input():
+        def on_frame_input():
             v = refs["frame_input"].value
             if v is None:
                 return
             max_v = int(refs["frame_slider"].props.get("max", 1))
             clamped = max(0, min(int(v), max_v))
-            refs["frame_slider"].value = clamped
-            refs["frame_input"].value = clamped
-            await on_slider_val()
+            refs["frame_slider"].value = clamped  # bind_value 同步 input
+            _load_frame(clamped)
 
         frame_input.on("change", on_frame_input)
 

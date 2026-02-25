@@ -33,7 +33,7 @@ from config import (
     WORKSPACE_DIR,
 )
 from matting.runner import get_video_engine, run_matting_task
-from pipeline.video_io import extract_frames, load_frame
+from pipeline.video_io import extract_frames, load_frame, preload_all_frames, unload_frames
 from matting.session_store import (
     empty_state,
     list_sessions,
@@ -194,6 +194,11 @@ def restore_session(session_id: str | None, state: dict) -> dict[str, Any]:
         out["warning"] = "帧数据目录不存在，无法恢复。"
         return out
 
+    old_frames_dir = state.get("frames_dir")
+    if old_frames_dir is not None and str(old_frames_dir) != str(frames_dir):
+        unload_frames(Path(old_frames_dir))
+    preload_all_frames(Path(frames_dir), loaded["num_frames"])
+
     frame = render_frame(loaded)
     gallery = keyframe_gallery(loaded)
     kf_info = keyframe_display(loaded)
@@ -282,6 +287,10 @@ def upload_video(video_path: str | None, state: dict) -> dict[str, Any]:
             "session_value": None,
         }
 
+    old_frames_dir = state.get("frames_dir")
+    if old_frames_dir is not None:
+        unload_frames(Path(old_frames_dir))
+
     session_id = _make_session_id(Path(video_path).name)
     frames_dir = MATTING_SESSIONS_DIR / session_id / "frames"
     num_frames, fps = extract_frames(Path(video_path), frames_dir)
@@ -321,6 +330,7 @@ def upload_video(video_path: str | None, state: dict) -> dict[str, Any]:
         json.dumps(meta, ensure_ascii=False, indent=2),
     )
     save_session_state(state)
+    preload_all_frames(frames_dir, num_frames)
 
     first_frame = render_frame(state)
     return {

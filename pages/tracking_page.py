@@ -190,7 +190,7 @@ def tracking_page(client):
                         refs["frame_input"].max = out["slider_max"]
                         refs["frame_input"].value = out.get("slider_value", 0)
                         refs["frame_input"].set_visibility(True)
-                    refs["frame_label"].set_text(f"帧 1 / {out.get('slider_max', 0) + 1}")
+                    refs["frame_label"].set_text(f"第 0 帧 / 共 {out.get('slider_max', 0)} 帧")
                     refs["video_display"].set_source(workspace_path_to_url(dest))
                     # 刷新 Session 列表并自动选中新建的 Session
                     out_refresh = ct_refresh_sessions()
@@ -236,7 +236,7 @@ def tracking_page(client):
                             refs["frame_input"].max = out["slider_max"]
                             refs["frame_input"].value = out.get("slider_value", 0)
                             refs["frame_input"].set_visibility(True)
-                        refs["frame_label"].set_text(out.get("frame_label", "帧 0 / 0"))
+                        refs["frame_label"].set_text(out.get("frame_label", "第 0 帧 / 共 0 帧"))
                         if out.get("keyframe_info"):
                             refs["tracking_kf_info"].set_text(out["keyframe_info"])
                         if out.get("keyframe_gallery") is not None:
@@ -297,48 +297,47 @@ def tracking_page(client):
             refs["grid_size"] = grid_size_input
         refs["manual_toolbar"] = manual_toolbar
 
-        # 关键帧保存/删除按钮（始终可见，不受模式切换影响）
-        with ui.row().classes("gap-2 items-center mb-2"):
-            async def on_save_tracking_kf():
-                out = await run.io_bound(ct_save_kf, page_state["tracking"])
-                page_state["tracking"] = out["session_state"]
-                apply_tracking_notify(out)
-                if out.get("keyframe_info"):
-                    refs["tracking_kf_info"].set_text(out["keyframe_info"])
-                if out.get("keyframe_gallery") is not None:
-                    refresh_gallery(refs["tracking_kf_gallery"], out["keyframe_gallery"], user_id, _jump_to_tracking_frame)
-                if "query_count" in out:
-                    refs["point_count_label"].set_text(f"已选择 {out['query_count']} 个追踪点")
-                await run.io_bound(ct_save_session, page_state["tracking"])
+        # 关键帧回调（按钮放在侧边栏，回调提前定义）
+        async def on_save_tracking_kf():
+            out = await run.io_bound(ct_save_kf, page_state["tracking"])
+            page_state["tracking"] = out["session_state"]
+            apply_tracking_notify(out)
+            if out.get("keyframe_info"):
+                refs["tracking_kf_info"].set_text(out["keyframe_info"])
+            if out.get("keyframe_gallery") is not None:
+                refresh_gallery(refs["tracking_kf_gallery"], out["keyframe_gallery"], user_id, _jump_to_tracking_frame)
+            if "query_count" in out:
+                refs["point_count_label"].set_text(f"已选择 {out['query_count']} 个追踪点")
+            await run.io_bound(ct_save_session, page_state["tracking"])
 
-            async def on_del_tracking_kf():
-                out = await run.io_bound(ct_del_kf, page_state["tracking"])
-                page_state["tracking"] = out["session_state"]
-                apply_tracking_notify(out)
-                if out.get("preview_frame") is not None:
-                    refs["frame_image"].set_source(write_tracking_preview(out["preview_frame"], user_id))
-                if out.get("keyframe_info"):
-                    refs["tracking_kf_info"].set_text(out["keyframe_info"])
-                if out.get("keyframe_gallery") is not None:
-                    refresh_gallery(refs["tracking_kf_gallery"], out["keyframe_gallery"], user_id, _jump_to_tracking_frame)
-                refs["point_count_label"].set_text(f"已选择 {page_state['tracking'].get('query_count', 0)} 个追踪点")
-                await run.io_bound(ct_save_session, page_state["tracking"])
-
-            ui.button("保存关键帧", on_click=on_save_tracking_kf, icon="save").props("color=primary")
-            ui.button("删除关键帧", on_click=on_del_tracking_kf, icon="delete")
+        async def on_del_tracking_kf():
+            out = await run.io_bound(ct_del_kf, page_state["tracking"])
+            page_state["tracking"] = out["session_state"]
+            apply_tracking_notify(out)
+            if out.get("preview_frame") is not None:
+                refs["frame_image"].set_source(write_tracking_preview(out["preview_frame"], user_id))
+            if out.get("keyframe_info"):
+                refs["tracking_kf_info"].set_text(out["keyframe_info"])
+            if out.get("keyframe_gallery") is not None:
+                refresh_gallery(refs["tracking_kf_gallery"], out["keyframe_gallery"], user_id, _jump_to_tracking_frame)
+            refs["point_count_label"].set_text(f"已选择 {page_state['tracking'].get('query_count', 0)} 个追踪点")
+            await run.io_bound(ct_save_session, page_state["tracking"])
 
         # SAM 目标选择工具栏（仅 SAM 模式可见）
-        with ui.row().classes("gap-2 flex-wrap items-center mb-2") as sam_toolbar:
-            with ui.column().classes("gap-0"):
-                ui.label("分割模型").classes("text-xs text-gray-500")
-                sam_model_select = ui.radio(["SAM2", "SAM3"], value="SAM2")
-                refs["sam_model"] = sam_model_select
-            with ui.column().classes("gap-0"):
-                ui.label("点击模式").classes("text-xs text-gray-500")
-                sam_point_mode = ui.radio(["Positive", "Negative"], value="Positive")
-                refs["sam_point_mode"] = sam_point_mode
-            ui.label("Positive=选中目标，Negative=排除区域").classes("text-xs text-gray-400")
+        with ui.column().classes("gap-2 mb-2") as sam_toolbar:
+            # 第一行：SAM 模型和点击模式选择
+            with ui.row().classes("gap-2 flex-wrap items-center"):
+                with ui.column().classes("gap-0"):
+                    ui.label("分割模型").classes("text-xs text-gray-500")
+                    sam_model_select = ui.radio(["SAM2", "SAM3"], value="SAM2")
+                    refs["sam_model"] = sam_model_select
+                with ui.column().classes("gap-0"):
+                    ui.label("点击模式").classes("text-xs text-gray-500")
+                    sam_point_mode = ui.radio(["Positive", "Negative"], value="Positive")
+                    refs["sam_point_mode"] = sam_point_mode
+                ui.label("Positive=选中目标，Negative=排除区域").classes("text-xs text-gray-400")
 
+            # SAM 回调
             async def on_sam_undo():
                 acquired, msg = try_acquire_gpu(user_id, user_name, "SAM 撤销")
                 if not acquired:
@@ -357,12 +356,16 @@ def tracking_page(client):
             async def on_sam_clear():
                 out = await run.io_bound(ct_sam_clear, page_state["tracking"])
                 page_state["tracking"] = out["session_state"]
+                # 同时清除当前帧追踪点
+                out2 = await run.io_bound(ct_clear_frame_points, page_state["tracking"])
+                page_state["tracking"] = out2["session_state"]
                 if out.get("preview_frame") is not None:
                     refs["frame_image"].set_source(write_tracking_preview(out["preview_frame"], user_id))
+                refs["point_count_label"].set_text(f"已选择 {out2.get('query_count', 0)} 个追踪点")
 
             async def on_generate_from_mask():
-                grid_size = int(refs["grid_size_sam"].value or 15)
-                out = await run.io_bound(ct_generate_points_from_mask, page_state["tracking"], grid_size)
+                num_points = int(refs["num_points_sam"].value or 30)
+                out = await run.io_bound(ct_generate_points_from_mask, page_state["tracking"], num_points)
                 page_state["tracking"] = out["session_state"]
                 if out.get("preview_frame") is not None:
                     refs["frame_image"].set_source(write_tracking_preview(out["preview_frame"], user_id))
@@ -372,12 +375,13 @@ def tracking_page(client):
                     ntype, nmsg = out["notify"]
                     ui.notify(nmsg, type=ntype)
 
-            ui.button("撤销", on_click=on_sam_undo, icon="undo")
-            ui.button("清除 Mask", on_click=on_sam_clear, icon="clear")
-            ui.separator().props("vertical")
-            grid_size_sam = ui.number("采样网格", value=15, min=3, max=30, step=1).classes("w-24")
-            refs["grid_size_sam"] = grid_size_sam
-            ui.button("从 Mask 生成追踪点", on_click=on_generate_from_mask, icon="scatter_plot").props("color=primary")
+            # 第二行：撤销、追踪点数、生成、清除
+            with ui.row().classes("gap-2 items-center"):
+                ui.button("撤销", on_click=on_sam_undo, icon="undo")
+                num_points_sam = ui.number("Mask 内追踪点数", value=30, min=5, max=200, step=5).classes("w-32")
+                refs["num_points_sam"] = num_points_sam
+                ui.button("重新从 Mask 生成追踪点", on_click=on_generate_from_mask, icon="scatter_plot").props("color=primary")
+                ui.button("清除 Mask 和追踪点", on_click=on_sam_clear, icon="clear")
         refs["sam_toolbar"] = sam_toolbar
         sam_toolbar.set_visibility(False)
 
@@ -391,51 +395,41 @@ def tracking_page(client):
         # 帧滑块 + 帧号输入框
         with ui.row().classes("w-full items-center gap-2 mb-2"):
             tracking_frame_slider = ui.slider(min=0, max=1, value=0, step=1).props("label-always").classes("flex-1")
+            tracking_frame_slider._props['loopback'] = False
             tracking_frame_slider.set_visibility(False)
             refs["frame_slider"] = tracking_frame_slider
             tracking_frame_input = ui.number(min=0, max=1, value=0, step=1).classes("w-24").props("dense outlined")
             tracking_frame_input.set_visibility(False)
             refs["frame_input"] = tracking_frame_input
+            tracking_frame_slider.bind_value(tracking_frame_input)
 
-        _tracking_slider_busy = {"value": False}
-        _tracking_slider_pending = {"value": None}
+        def _load_tracking_frame(frame_idx: int):
+            """加载追踪帧并更新标签。slider/input 同步由 bind_value 处理。"""
+            out = ct_change_frame(frame_idx, page_state["tracking"])
+            page_state["tracking"] = out["session_state"]
+            if out.get("preview_frame") is not None:
+                refs["frame_image"].set_source(write_tracking_preview(out["preview_frame"], user_id))
+            if out.get("frame_label"):
+                refs["frame_label"].set_text(out["frame_label"])
 
-        async def on_tracking_slider_change():
-            v = refs["frame_slider"].value
+        def on_tracking_slider_change(e):
+            v = e.args
             if v is None or page_state["tracking"].get("frames_dir") is None:
                 return
-            if _tracking_slider_busy["value"]:
-                _tracking_slider_pending["value"] = v
+            _load_tracking_frame(int(v))
+
+        tracking_frame_slider.on("update:model-value", on_tracking_slider_change, [None], throttle=0.05)
+
+        def on_tracking_frame_input():
+            if page_state["tracking"].get("frames_dir") is None:
                 return
-            _tracking_slider_busy["value"] = True
-            try:
-                current_v = v
-                while True:
-                    out = await run.io_bound(ct_change_frame, int(current_v), page_state["tracking"])
-                    page_state["tracking"] = out["session_state"]
-                    if out.get("preview_frame") is not None:
-                        refs["frame_image"].set_source(write_tracking_preview(out["preview_frame"], user_id))
-                    if out.get("frame_label"):
-                        refs["frame_label"].set_text(out["frame_label"])
-                    refs["frame_input"].value = int(current_v)
-                    if _tracking_slider_pending["value"] is None:
-                        break
-                    current_v = _tracking_slider_pending["value"]
-                    _tracking_slider_pending["value"] = None
-            finally:
-                _tracking_slider_busy["value"] = False
-
-        tracking_frame_slider.on("update:model-value", on_tracking_slider_change)
-
-        async def on_tracking_frame_input():
             v = refs["frame_input"].value
-            if v is None or page_state["tracking"].get("frames_dir") is None:
+            if v is None:
                 return
             max_v = int(refs["frame_slider"].props.get("max", 1))
             clamped = max(0, min(int(v), max_v))
-            refs["frame_slider"].value = clamped
-            refs["frame_input"].value = clamped
-            await on_tracking_slider_change()
+            refs["frame_slider"].value = clamped  # bind_value 同步 input
+            _load_tracking_frame(clamped)
 
         tracking_frame_input.on("change", on_tracking_frame_input)
 
@@ -447,15 +441,9 @@ def tracking_page(client):
             refs["point_count_label"] = point_count_label
 
         # 跳转到指定帧（关键帧 Gallery 点击回调）
-        async def _jump_to_tracking_frame(frame_idx: int):
-            refs["frame_slider"].value = frame_idx
-            refs["frame_input"].value = frame_idx
-            out = await run.io_bound(ct_change_frame, frame_idx, page_state["tracking"])
-            page_state["tracking"] = out["session_state"]
-            if out.get("preview_frame") is not None:
-                refs["frame_image"].set_source(write_tracking_preview(out["preview_frame"], user_id))
-            if out.get("frame_label"):
-                refs["frame_label"].set_text(out["frame_label"])
+        def _jump_to_tracking_frame(frame_idx: int):
+            refs["frame_slider"].value = frame_idx  # bind_value 同步 input
+            _load_tracking_frame(frame_idx)
 
         # 交互式图片（点击选点）+ 关键帧 Gallery 侧边栏
         click_state = {"busy": False}
@@ -532,6 +520,9 @@ def tracking_page(client):
 
             # 关键帧 Gallery 侧边栏（显示已保存的关键帧缩略图）
             with ui.column().classes("w-48"):
+                with ui.row().classes("gap-1 items-center"):
+                    ui.button("保存关键帧", on_click=on_save_tracking_kf, icon="save").props("color=primary dense")
+                    ui.button("删除关键帧", on_click=on_del_tracking_kf, icon="delete").props("dense")
                 ui.label("已保存的关键帧").classes("text-xs text-gray-500 font-medium")
                 tracking_kf_info = ui.label("尚未保存任何关键帧。").classes("text-xs text-gray-400")
                 refs["tracking_kf_info"] = tracking_kf_info

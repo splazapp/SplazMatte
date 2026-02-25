@@ -118,7 +118,7 @@ def write_frame_preview(frame: np.ndarray, user_id: str) -> str:
     elif frame.shape[2] == 4:
         frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2RGB)
     cv2.imwrite(str(path), cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
-    return f"/preview/{user_id}/current.png?t={id(frame)}"
+    return f"/preview/{user_id}/current.png?t={time.time_ns()}"
 
 
 def write_tracking_preview(frame: np.ndarray, user_id: str) -> str:
@@ -133,7 +133,7 @@ def write_tracking_preview(frame: np.ndarray, user_id: str) -> str:
     elif frame.shape[2] == 4:
         frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2RGB)
     cv2.imwrite(str(path), cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
-    return f"/tracking_preview/{user_id}/current.png?t={id(frame)}"
+    return f"/tracking_preview/{user_id}/current.png?t={time.time_ns()}"
 
 
 # ---------------------------------------------------------------------------
@@ -292,10 +292,16 @@ def apply_restore_out(
         refs["video_display"].set_source(session_path_to_url(out["video_path"]))
     if out.get("slider_visible") is not None:
         refs["frame_slider"].set_visibility(out["slider_visible"])
+        if "frame_input" in refs:
+            refs["frame_input"].set_visibility(out["slider_visible"])
     if out.get("slider_max") is not None:
         refs["frame_slider"].props["max"] = out["slider_max"]
+        if "frame_input" in refs:
+            refs["frame_input"].max = out["slider_max"]
     if out.get("slider_value") is not None:
         refs["frame_slider"].value = out["slider_value"]
+        if "frame_input" in refs:
+            refs["frame_input"].value = out["slider_value"]
     if out.get("model_type") is not None:
         refs["model_selector"].value = out["model_type"]
     if out.get("text_prompt_visible") is not None:

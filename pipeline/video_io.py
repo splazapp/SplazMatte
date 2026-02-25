@@ -12,6 +12,11 @@ from tqdm import tqdm
 
 log = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Preloaded frames – all frames loaded into memory after upload/restore
+# ---------------------------------------------------------------------------
+_preloaded_frames: dict[str, list[np.ndarray]] = {}
+
 
 def extract_frames(
     video_path: Path,
@@ -60,19 +65,59 @@ def extract_frames(
     return num_frames, fps
 
 
+def preload_all_frames(frames_dir: Path, num_frames: int) -> None:
+    """Load all frames into memory for instant slider access.
+
+    Args:
+        frames_dir: Directory containing JPEG frames.
+        num_frames: Total number of frames to load.
+    """
+    key = str(frames_dir)
+    if key in _preloaded_frames:
+        return
+    log.info("Preloading %d frames from %s", num_frames, frames_dir)
+    frames: list[np.ndarray] = []
+    for i in range(num_frames):
+        path = frames_dir / f"{i + 1:06d}.jpg"
+        data = np.fromfile(str(path), dtype=np.uint8)
+        img = cv2.imdecode(data, cv2.IMREAD_COLOR)
+        if img is None:
+            raise FileNotFoundError(f"Frame not found: {path}")
+        frames.append(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+    _preloaded_frames[key] = frames
+    log.info("Preloaded %d frames (%.1f MB)", num_frames,
+             sum(f.nbytes for f in frames) / 1e6)
+
+
+def unload_frames(frames_dir: Path) -> None:
+    """Release preloaded frames for *frames_dir* to free memory."""
+    removed = _preloaded_frames.pop(str(frames_dir), None)
+    if removed is not None:
+        log.info("Unloaded %d preloaded frames for %s", len(removed), frames_dir)
+
+
 def load_frame(frames_dir: Path, frame_idx: int) -> np.ndarray:
     """Load a single frame as an RGB numpy array (H, W, 3).
+
+    If frames have been preloaded via ``preload_all_frames``, the cached
+    array is returned directly. Otherwise falls back to reading from disk.
 
     Args:
         frames_dir: Directory containing JPEG frames.
         frame_idx: 0-based frame index.
 
     Returns:
-        RGB uint8 array of shape (H, W, 3).
+        RGB uint8 array of shape (H, W, 3).  **Callers must not mutate
+        the returned array in-place**; use ``.copy()`` if modification is
+        needed.
     """
-    # ffmpeg outputs 1-based filenames
+    key = str(frames_dir)
+    cached = _preloaded_frames.get(key)
+    if cached is not None:
+        return cached[frame_idx]
+
+    # Fallback: read from disk (no caching)
     path = frames_dir / f"{frame_idx + 1:06d}.jpg"
-    # cv2.imread cannot handle non-ASCII paths on Windows; use imdecode
     data = np.fromfile(str(path), dtype=np.uint8)
     img = cv2.imdecode(data, cv2.IMREAD_COLOR)
     if img is None:

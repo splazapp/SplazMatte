@@ -24,7 +24,7 @@ from config import (
     TRACKING_SESSIONS_DIR,
     WORKSPACE_DIR,
 )
-from pipeline.video_io import extract_frames, load_frame
+from pipeline.video_io import extract_frames, load_frame, preload_all_frames, unload_frames
 from utils.mask_utils import draw_points, fit_to_box, overlay_mask
 
 log = logging.getLogger(__name__)
@@ -136,6 +136,10 @@ def preprocess_video(video_path: str, state: dict) -> dict[str, Any]:
     if num_frames == 0:
         return {"notify": ("error", "视频为空"), "session_state": state}
 
+    old_frames_dir = state.get("frames_dir")
+    if old_frames_dir is not None:
+        unload_frames(Path(old_frames_dir))
+    preload_all_frames(frames_dir, num_frames)
     frame0 = load_frame(frames_dir, 0)
     H, W = frame0.shape[:2]
 
@@ -199,7 +203,7 @@ def restore_tracking_session(session_id: str | None, state: dict) -> dict[str, A
     out = {
         "session_state": state,
         "preview_frame": None,
-        "frame_label": "帧 0 / 0",
+        "frame_label": "第 0 帧 / 共 0 帧",
         "slider_max": 0,
         "slider_value": 0,
         "slider_visible": False,
@@ -230,6 +234,11 @@ def restore_tracking_session(session_id: str | None, state: dict) -> dict[str, A
     current_frame = max(0, min(current_frame, num_frames - 1))
     loaded["current_frame"] = current_frame
 
+    new_frames_dir = loaded["frames_dir"]
+    old_frames_dir = state.get("frames_dir")
+    if old_frames_dir is not None and str(old_frames_dir) != str(new_frames_dir):
+        unload_frames(Path(old_frames_dir))
+    preload_all_frames(Path(new_frames_dir), num_frames)
     preview = _get_preview_frame(loaded, current_frame)
     kf = loaded.get("keyframes", {}).get(current_frame)
     if kf:
@@ -242,7 +251,7 @@ def restore_tracking_session(session_id: str | None, state: dict) -> dict[str, A
     return {
         "session_state": loaded,
         "preview_frame": preview,
-        "frame_label": f"帧 {current_frame + 1} / {num_frames}{kf_marker}",
+        "frame_label": f"第 {current_frame} 帧 / 共 {num_frames - 1} 帧{kf_marker}",
         "slider_max": num_frames - 1,
         "slider_value": current_frame,
         "slider_visible": True,
@@ -282,6 +291,12 @@ def change_frame(frame_idx: int, state: dict) -> dict[str, Any]:
 
     state["current_frame"] = frame_idx
 
+    # 切换帧时清除 SAM 状态，避免旧帧的标注点/mask 残留
+    state["sam_points"] = []
+    state["sam_labels"] = []
+    state["sam_mask"] = None
+    state["sam_image_idx"] = -1
+
     # Restore points from saved keyframe if available
     kf = state.get("keyframes", {}).get(frame_idx)
     if kf is not None:
@@ -301,7 +316,7 @@ def change_frame(frame_idx: int, state: dict) -> dict[str, Any]:
     return {
         "session_state": state,
         "preview_frame": preview,
-        "frame_label": f"帧 {frame_idx + 1} / {num_frames}{kf_marker}",
+        "frame_label": f"第 {frame_idx} 帧 / 共 {num_frames - 1} 帧{kf_marker}",
     }
 
 
@@ -643,15 +658,101 @@ def sam_clear(state: dict) -> dict[str, Any]:
     return {"session_state": state, "preview_frame": preview}
 
 
+def _sample_contour_uniform(
+    contours: list[np.ndarray], n: int
+) -> list[tuple[float, float]]:
+    """沿轮廓等弧长采样 n 个点。
+
+    Args:
+        contours: cv2.findContours 返回的轮廓列表。
+        n: 采样点数。
+
+    Returns:
+        采样点列表 [(x, y), ...]。
+    """
+    valid = [c.squeeze(1) for c in contours if len(c) >= 2]
+    if not valid:
+        # 只有单点轮廓
+        for c in contours:
+            if len(c) >= 1:
+                pt = c.squeeze()
+                return [(float(pt[0]), float(pt[1]))]
+        return []
+    all_pts = np.concatenate(valid)
+    if len(all_pts) < 2:
+        return [(float(all_pts[0][0]), float(all_pts[0][1]))]
+
+    diffs = np.diff(all_pts, axis=0, append=all_pts[:1])  # 闭合
+    seg_len = np.linalg.norm(diffs, axis=1)
+    cum = np.concatenate([[0], np.cumsum(seg_len)])
+    total = cum[-1]
+    if total < 1e-6:
+        return [(float(all_pts[0][0]), float(all_pts[0][1]))]
+
+    sample_d = np.linspace(0, total, n, endpoint=False) + total / (2 * n)
+    result = []
+    for d in sample_d:
+        d = d % total
+        idx = np.searchsorted(cum, d) - 1
+        idx = max(0, min(idx, len(all_pts) - 1))
+        t = (d - cum[idx]) / max(seg_len[idx], 1e-6)
+        pt = all_pts[idx] + t * diffs[idx]
+        result.append((float(pt[0]), float(pt[1])))
+    return result
+
+
+def _farthest_point_sample(
+    dist_transform: np.ndarray, n: int, seed_points: list[tuple[float, float]]
+) -> list[tuple[float, float]]:
+    """距离变换加权的最远点采样。
+
+    Args:
+        dist_transform: cv2.distanceTransform 结果。
+        n: 采样点数。
+        seed_points: 已有的种子点（如边缘采样点），用于初始化距离。
+
+    Returns:
+        采样点列表 [(x, y), ...]。
+    """
+    ys, xs = np.where(dist_transform > 1.0)
+    if len(ys) == 0:
+        return []
+    cands = np.stack([xs, ys], axis=1).astype(float)
+    dt_vals = dist_transform[ys, xs]
+
+    if seed_points:
+        seeds = np.array(seed_points)
+        min_dist = np.min(
+            np.linalg.norm(cands[:, None] - seeds[None], axis=2), axis=1
+        )
+    else:
+        min_dist = np.full(len(cands), np.inf)
+
+    result = []
+    for _ in range(n):
+        if len(cands) == 0:
+            break
+        scores = min_dist * np.sqrt(dt_vals + 1)
+        best = np.argmax(scores)
+        pt = cands[best]
+        result.append((float(pt[0]), float(pt[1])))
+        new_d = np.linalg.norm(cands - pt, axis=1)
+        min_dist = np.minimum(min_dist, new_d)
+    return result
+
+
 def generate_points_from_mask(
     state: dict,
-    grid_size: int = 15,
+    num_points: int = 30,
 ) -> dict[str, Any]:
-    """Sample a grid of tracking points inside the SAM mask.
+    """在 SAM mask 内智能生成追踪点。
+
+    使用连通域分析按面积分配点数，每个区域 40% 边缘 + 60% 内部。
+    边缘点沿轮廓等弧长采样，内部点使用距离变换加权最远点采样。
 
     Args:
         state: Current tracking state (must contain sam_mask).
-        grid_size: Grid density. Points outside the mask are discarded.
+        num_points: 期望生成的追踪点数量。
 
     Returns:
         Dict with session_state, preview_frame, query_count, notify.
@@ -663,41 +764,102 @@ def generate_points_from_mask(
         }
 
     mask = state["sam_mask"]
-    h, w = mask.shape[:2]
-    margin_x = w / 64
-    margin_y = h / 64
+    binary = (mask > 127).astype(np.uint8)
+    total_area = int(binary.sum())
 
-    ys = np.linspace(margin_y, h - margin_y, grid_size)
-    xs = np.linspace(margin_x, w - margin_x, grid_size)
-    grid_x, grid_y = np.meshgrid(xs, ys)
-    candidates = np.stack([grid_x.ravel(), grid_y.ravel()], axis=1)
+    # 每次生成前清空当前帧已有的追踪点，避免重复点击累积
+    frame_idx = state["current_frame"]
+    state["query_points"][frame_idx] = []
+    state["query_colors"][frame_idx] = []
 
-    inside = []
-    for pt in candidates:
-        ix, iy = int(pt[0]), int(pt[1])
-        if 0 <= iy < h and 0 <= ix < w and mask[iy, ix] > 0:
-            inside.append(pt)
-
-    if len(inside) < 4:
+    if total_area < 5:
         return {
             "session_state": state,
-            "notify": ("warning", f"Mask 内仅有 {len(inside)} 个点，请增大网格或重选目标"),
+            "notify": ("warning", "Mask 太小，请重新选择目标"),
         }
 
-    frame_idx = state["current_frame"]
+    # 极小 mask：只放质心
+    if total_area < 20:
+        ys, xs = np.where(binary)
+        cx, cy = float(xs.mean()), float(ys.mean())
+        import matplotlib
+        cmap = matplotlib.colormaps.get_cmap("gist_rainbow")
+        offset = len(state["query_points"][frame_idx])
+        color = cmap(offset % 20 / 20)
+        color_rgb = (int(color[0] * 255), int(color[1] * 255), int(color[2] * 255))
+        state["query_points"][frame_idx].append((cx, cy, frame_idx))
+        state["query_colors"][frame_idx].append(color_rgb)
+        state["query_count"] = _effective_point_count(state)
+        preview = _render_sam_preview(state)
+        for pt, col in zip(
+            state["query_points"][frame_idx], state["query_colors"][frame_idx]
+        ):
+            px, py, _ = pt
+            cv2.circle(preview, (int(px), int(py)), 4, col, -1)
+        return {
+            "session_state": state,
+            "preview_frame": preview,
+            "query_count": state["query_count"],
+            "notify": ("positive", "Mask 极小，已在质心放置 1 个追踪点"),
+        }
+
+    # 连通域分析 → 按面积分配点数
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary)
+    valid = [
+        (i, stats[i, cv2.CC_STAT_AREA])
+        for i in range(1, num_labels)
+        if stats[i, cv2.CC_STAT_AREA] >= 10
+    ]
+    if not valid:
+        return {
+            "session_state": state,
+            "notify": ("warning", "Mask 太小，请重新选择目标"),
+        }
+
+    total_valid = sum(a for _, a in valid)
+    alloc = {i: max(1, round(num_points * a / total_valid)) for i, a in valid}
+
+    # 修正总数使之等于 num_points
+    diff = num_points - sum(alloc.values())
+    if diff != 0:
+        largest_id = max(alloc, key=alloc.get)
+        alloc[largest_id] = max(1, alloc[largest_id] + diff)
+
+    # 对每个连通域：40% 边缘 + 60% 内部
+    all_points: list[tuple[float, float]] = []
+    for comp_id, n_pts in alloc.items():
+        comp_mask = (labels == comp_id).astype(np.uint8)
+        n_edge = max(1, round(n_pts * 0.4))
+        n_interior = max(0, n_pts - n_edge)
+
+        contours, _ = cv2.findContours(
+            comp_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE
+        )
+        edge_pts = _sample_contour_uniform(contours, n_edge)
+
+        if n_interior > 0:
+            dist = cv2.distanceTransform(comp_mask, cv2.DIST_L2, 5)
+            interior_pts = _farthest_point_sample(dist, n_interior, edge_pts)
+        else:
+            interior_pts = []
+
+        all_points.extend(edge_pts)
+        all_points.extend(interior_pts)
+
+    # 添加到 state（复用现有颜色分配逻辑）
     import matplotlib
     cmap = matplotlib.colormaps.get_cmap("gist_rainbow")
-
     color_offset = len(state["query_points"][frame_idx])
-    for i, pt in enumerate(inside):
-        x, y = float(pt[0]), float(pt[1])
+
+    for i, (x, y) in enumerate(all_points):
         color = cmap((color_offset + i) % 20 / 20)
         color_rgb = (int(color[0] * 255), int(color[1] * 255), int(color[2] * 255))
         state["query_points"][frame_idx].append((x, y, frame_idx))
         state["query_colors"][frame_idx].append(color_rgb)
 
     state["query_count"] = _effective_point_count(state)
-    log.info("Generated %d tracking points from mask (grid %d)", len(inside), grid_size)
+    actual = len(all_points)
+    log.info("Generated %d tracking points from mask (requested %d)", actual, num_points)
 
     preview = _render_sam_preview(state)
     for pt, col in zip(
@@ -706,11 +868,15 @@ def generate_points_from_mask(
         px, py, _ = pt
         cv2.circle(preview, (int(px), int(py)), 4, col, -1)
 
+    msg = f"已在 Mask 内生成 {actual} 个追踪点"
+    if actual < num_points:
+        msg += f"（请求 {num_points}，可用像素不足）"
+
     return {
         "session_state": state,
         "preview_frame": preview,
         "query_count": state["query_count"],
-        "notify": ("positive", f"已在 Mask 内生成 {len(inside)} 个追踪点"),
+        "notify": ("positive", msg),
     }
 
 
