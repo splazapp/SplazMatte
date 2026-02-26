@@ -104,7 +104,6 @@ class SAM2VideoEngine:
             video_path=str(frames_dir),
             offload_video_to_cpu=non_cuda,
             offload_state_to_cpu=non_cuda,
-            async_loading_frames=non_cuda,
         )
         num_frames = state["num_frames"]
 
