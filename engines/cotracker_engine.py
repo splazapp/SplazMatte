@@ -94,6 +94,7 @@ class CoTrackerEngine:
         else:
             self.device = _device
         self.window_len = window_len
+        self._online_lock = threading.Lock()
         self._online_model = None
         self._offline_predictor = None
 
@@ -275,55 +276,55 @@ class CoTrackerEngine:
             )
             queries_tensor = torch.cat([queries_tensor, support_pts], dim=1)
 
-        self._online_model.init_video_online_processing()
-        self._queries = queries_tensor
+        with self._online_lock:
+            self._online_model.init_video_online_processing()
 
-        total_steps = max(1, (T - self.step * 2) // self.step + 1)
-        step_count = 0
+            total_steps = max(1, (T - self.step * 2) // self.step + 1)
+            step_count = 0
 
-        tracks = None
-        visibility = None
+            tracks = None
+            visibility = None
 
-        for ind in range(0, T - self.step, self.step):
-            if cancel_event and cancel_event.is_set():
-                raise TrackingCancelledError()
+            for ind in range(0, T - self.step, self.step):
+                if cancel_event and cancel_event.is_set():
+                    raise TrackingCancelledError()
 
-            end_ind = min(ind + self.step * 2, T)
-            chunk = video_tensor[:, ind:end_ind]
+                end_ind = min(ind + self.step * 2, T)
+                chunk = video_tensor[:, ind:end_ind]
 
-            B, chunk_T, C, chunk_H, chunk_W = chunk.shape
-            chunk = chunk.reshape(B * chunk_T, C, chunk_H, chunk_W)
-            chunk = F.interpolate(
-                chunk, tuple(self.interp_shape), mode="bilinear", align_corners=True
-            )
-            chunk = chunk.reshape(B, chunk_T, 3, self.interp_shape[0], self.interp_shape[1])
+                B, chunk_T, C, chunk_H, chunk_W = chunk.shape
+                chunk = chunk.reshape(B * chunk_T, C, chunk_H, chunk_W)
+                chunk = F.interpolate(
+                    chunk, tuple(self.interp_shape), mode="bilinear", align_corners=True
+                )
+                chunk = chunk.reshape(B, chunk_T, 3, self.interp_shape[0], self.interp_shape[1])
 
-            pred_tracks, pred_vis, pred_conf, _ = self._online_model(
-                video=chunk, queries=self._queries, iters=6, is_online=True
-            )
+                pred_tracks, pred_vis, pred_conf, _ = self._online_model(
+                    video=chunk, queries=queries_tensor, iters=6, is_online=True
+                )
 
-            pred_vis = pred_vis * pred_conf
-            pred_vis = pred_vis > 0.6
+                pred_vis = pred_vis * pred_conf
+                pred_vis = pred_vis > 0.6
 
-            pred_tracks = pred_tracks * pred_tracks.new_tensor([
-                (W - 1) / (self.interp_shape[1] - 1),
-                (H - 1) / (self.interp_shape[0] - 1),
-            ])
+                pred_tracks = pred_tracks * pred_tracks.new_tensor([
+                    (W - 1) / (self.interp_shape[1] - 1),
+                    (H - 1) / (self.interp_shape[0] - 1),
+                ])
 
-            tracks = pred_tracks
-            visibility = pred_vis
+                tracks = pred_tracks
+                visibility = pred_vis
 
-            step_count += 1
-            if progress_callback:
-                frac = min(step_count / total_steps, 1.0)
-                progress_callback(frac, f"追踪中 {step_count}/{total_steps}")
+                step_count += 1
+                if progress_callback:
+                    frac = min(step_count / total_steps, 1.0)
+                    progress_callback(frac, f"追踪中 {step_count}/{total_steps}")
 
-        if add_support_grid:
-            tracks = tracks[:, :, :N]
-            visibility = visibility[:, :, :N]
+            if add_support_grid:
+                tracks = tracks[:, :, :N]
+                visibility = visibility[:, :, :N]
 
-        tracks = tracks[0].permute(1, 0, 2).cpu().numpy()
-        visibility = visibility[0].permute(1, 0).cpu().numpy()
+            tracks = tracks[0].permute(1, 0, 2).cpu().numpy()
+            visibility = visibility[0].permute(1, 0).cpu().numpy()
 
         log.info("Tracking complete: %d points, %d frames", tracks.shape[0], tracks.shape[1])
         return tracks, visibility
