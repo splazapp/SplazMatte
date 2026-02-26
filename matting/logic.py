@@ -25,6 +25,7 @@ from config import (
     DEFAULT_ERODE,
     DEFAULT_MATTING_ENGINE,
     MATTING_SESSIONS_DIR,
+    MAX_VIDEO_DURATION,
     PREVIEW_MAX_H,
     PREVIEW_MAX_W,
     PROCESSING_LOG_FILE,
@@ -294,7 +295,8 @@ def upload_video(video_path: str | None, state: dict) -> dict[str, Any]:
 
     session_id = _make_session_id(Path(video_path).name)
     frames_dir = MATTING_SESSIONS_DIR / session_id / "frames"
-    num_frames, fps = extract_frames(Path(video_path), frames_dir)
+    max_frames = int(MAX_VIDEO_DURATION * 30) if MAX_VIDEO_DURATION else None
+    num_frames, fps = extract_frames(Path(video_path), frames_dir, max_frames=max_frames)
 
     state = empty_state()
     state["session_id"] = session_id

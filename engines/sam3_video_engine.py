@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Callable
 
 import numpy as np
-from config import SAM3_CHECKPOINT, get_device  # must precede torch for MPS env var
+from config import MAX_PROPAGATION_FRAMES, SAM3_CHECKPOINT, get_device  # must precede torch for MPS env var
 
 import torch
 from engines._sam3_deps import setup_sam3_deps
@@ -116,6 +116,13 @@ class SAM3VideoEngine:
         """
         if not keyframe_masks:
             raise ValueError("At least one keyframe mask is required.")
+
+        num_jpgs = len(list(Path(frames_dir).glob("*.jpg")))
+        if num_jpgs > MAX_PROPAGATION_FRAMES:
+            raise ValueError(
+                f"帧数 ({num_jpgs}) 超过传播上限 ({MAX_PROPAGATION_FRAMES})。"
+                f"请使用更短的视频或调整 SPLAZMATTE_MAX_PROPAGATION_FRAMES 环境变量。"
+            )
 
         # The SDK hardcodes storage_device=torch.device("cuda") when
         # offload_state_to_cpu=False.  We pass True to dodge the crash

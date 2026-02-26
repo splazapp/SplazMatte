@@ -9,7 +9,7 @@ from typing import Callable
 import numpy as np
 import torch
 
-from config import SAM2_CHECKPOINT, SAM2_CONFIG, SDKS_DIR, get_device
+from config import SAM2_CHECKPOINT, SAM2_CONFIG, MAX_PROPAGATION_FRAMES, SDKS_DIR, get_device
 
 log = logging.getLogger(__name__)
 
@@ -92,7 +92,20 @@ class SAM2VideoEngine:
         if not keyframe_masks:
             raise ValueError("At least one keyframe mask is required.")
 
-        state = self.predictor.init_state(video_path=str(frames_dir))
+        num_jpgs = len(list(Path(frames_dir).glob("*.jpg")))
+        if num_jpgs > MAX_PROPAGATION_FRAMES:
+            raise ValueError(
+                f"帧数 ({num_jpgs}) 超过传播上限 ({MAX_PROPAGATION_FRAMES})。"
+                f"请使用更短的视频或调整 SPLAZMATTE_MAX_PROPAGATION_FRAMES 环境变量。"
+            )
+
+        non_cuda = self.device.type != "cuda"
+        state = self.predictor.init_state(
+            video_path=str(frames_dir),
+            offload_video_to_cpu=non_cuda,
+            offload_state_to_cpu=non_cuda,
+            async_loading_frames=non_cuda,
+        )
         num_frames = state["num_frames"]
 
         # Register all keyframe masks as obj_id=1
