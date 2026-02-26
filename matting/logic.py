@@ -297,6 +297,7 @@ def upload_video(video_path: str | None, state: dict) -> dict[str, Any]:
     frames_dir = MATTING_SESSIONS_DIR / session_id / "frames"
     max_frames = int(MAX_VIDEO_DURATION * 30) if MAX_VIDEO_DURATION else None
     num_frames, fps = extract_frames(Path(video_path), frames_dir, max_frames=max_frames)
+    was_truncated = max_frames is not None and num_frames >= max_frames
 
     state = empty_state()
     state["session_id"] = session_id
@@ -336,7 +337,7 @@ def upload_video(video_path: str | None, state: dict) -> dict[str, Any]:
     preload_all_frames(frames_dir, num_frames)
 
     first_frame = render_frame(state)
-    return {
+    out = {
         "session_state": state,
         "frame_image": first_frame,
         "frame_label": f"第 0 帧 / 共 {num_frames - 1} 帧",
@@ -348,6 +349,13 @@ def upload_video(video_path: str | None, state: dict) -> dict[str, Any]:
         "session_choices": list_sessions(),
         "session_value": session_id,
     }
+    if was_truncated:
+        actual_duration = num_frames / fps if fps else 0
+        out["warning"] = (
+            f"视频超过 {MAX_VIDEO_DURATION} 秒限制，"
+            f"已截取前 {actual_duration:.0f} 秒（{num_frames} 帧）。"
+        )
+    return out
 
 
 # ---------------------------------------------------------------------------

@@ -691,6 +691,9 @@ def matting_page(client):
                 progress_q.put(("done", result))
             except MattingCancelledError:
                 progress_q.put(("cancelled",))
+            except Exception as exc:
+                log.exception("Matting failed")
+                progress_q.put(("error", str(exc)))
 
         async def start():
             await run.io_bound(blocking)
@@ -717,6 +720,10 @@ def matting_page(client):
                     elif item[0] == "cancelled":
                         _finish_matting(r, progress_el, uid)
                         ui.notify("抠像已停止", type="info")
+                        return False
+                    elif item[0] == "error":
+                        _finish_matting(r, progress_el, uid)
+                        ui.notify(f"抠像失败: {item[1]}", type="negative")
                         return False
             except queue.Empty:
                 pass
