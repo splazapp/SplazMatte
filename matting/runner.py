@@ -401,6 +401,9 @@ def execute_queue(
     """
     reset_queue_cancel()
 
+    from pipeline.video_io import unload_all_frames
+    unload_all_frames()
+
     done_count = 0
     error_count = 0
     timings: list[str] = []

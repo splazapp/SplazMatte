@@ -514,7 +514,15 @@ def matting_page(client):
                 def cb(frac: float, desc: str):
                     progress_q.put(("progress", frac, desc))
                 def blocking():
-                    result = run_propagation(refs["model_selector"].value, page_state["session"], progress_callback=cb)
+                    try:
+                        result = run_propagation(refs["model_selector"].value, page_state["session"], progress_callback=cb)
+                    except Exception as exc:
+                        log.exception("Propagation failed")
+                        result = {
+                            "session_state": page_state["session"],
+                            "propagation_preview_path": None,
+                            "warning": f"传播失败: {exc}",
+                        }
                     progress_q.put(("done", result))
                 async def start():
                     await run.io_bound(blocking)

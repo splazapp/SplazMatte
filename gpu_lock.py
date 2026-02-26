@@ -52,9 +52,12 @@ def try_acquire_gpu(user_id: str, user_name: str, operation: str) -> tuple[bool,
             )
 
         if _lock_info is not None and _lock_info.holder_id == user_id:
-            _lock_info.operation = operation
-            _lock_info.start_time = time.time()
-            return True, "已持有锁"
+            elapsed = _lock_info.elapsed_seconds()
+            return (
+                False,
+                f"你已有一个 GPU 操作正在进行「{_lock_info.operation}」"
+                f"({elapsed:.0f}秒)，请等待完成后再操作。",
+            )
 
         acquired = _gpu_lock.acquire(blocking=False)
         if acquired:

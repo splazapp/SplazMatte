@@ -72,8 +72,16 @@ def preload_all_frames(frames_dir: Path, num_frames: int) -> None:
         frames_dir: Directory containing JPEG frames.
         num_frames: Total number of frames to load.
     """
+    from config import MAX_PRELOAD_FRAMES
+
     key = str(frames_dir)
     if key in _preloaded_frames:
+        return
+    if num_frames > MAX_PRELOAD_FRAMES:
+        log.info(
+            "Skipping preload: %d frames exceeds limit %d (slider falls back to disk)",
+            num_frames, MAX_PRELOAD_FRAMES,
+        )
         return
     log.info("Preloading %d frames from %s", num_frames, frames_dir)
     frames: list[np.ndarray] = []
@@ -94,6 +102,14 @@ def unload_frames(frames_dir: Path) -> None:
     removed = _preloaded_frames.pop(str(frames_dir), None)
     if removed is not None:
         log.info("Unloaded %d preloaded frames for %s", len(removed), frames_dir)
+
+
+def unload_all_frames() -> None:
+    """Release ALL preloaded frames to free memory."""
+    for key in list(_preloaded_frames.keys()):
+        removed = _preloaded_frames.pop(key, None)
+        if removed:
+            log.info("Unloaded %d preloaded frames for %s", len(removed), key)
 
 
 def load_frame(frames_dir: Path, frame_idx: int) -> np.ndarray:

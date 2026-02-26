@@ -218,7 +218,8 @@ def load_session(session_id: str) -> dict | None:
     state["_sam2_image_idx"] = -1
 
     # Restore matting parameters and task status
-    state["matting_engine"] = saved.get("matting_engine", DEFAULT_MATTING_ENGINE)
+    # matting_engine 总是使用 config 中的默认值，不从旧 session 恢复
+    state["matting_engine"] = DEFAULT_MATTING_ENGINE
     state["erode"] = saved.get("erode", DEFAULT_ERODE)
     state["dilate"] = saved.get("dilate", DEFAULT_DILATE)
     state["batch_size"] = saved.get("batch_size", VIDEOMAMA_BATCH_SIZE)

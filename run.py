@@ -68,6 +68,7 @@ def cmd_session(args):
     """Run matting on a single session."""
     from matting.runner import run_matting_task
     from matting.session_store import load_session, save_session_state
+    from gpu_lock import try_acquire_gpu, release_gpu
 
     session_id = args.session_id
     state = load_session(session_id)
@@ -88,6 +89,11 @@ def cmd_session(args):
         f"  Frames: {state['num_frames']}  Keyframes: {len(state['keyframes'])}\n"
         f"  Engine: {state.get('matting_engine', DEFAULT_MATTING_ENGINE)}"
     )
+
+    acquired, msg = try_acquire_gpu("__cli__", "CLI", "单任务抠像")
+    if not acquired:
+        print(f"Error: GPU is busy — {msg}", file=sys.stderr)
+        sys.exit(1)
 
     state["task_status"] = "processing"
     state["error_msg"] = ""
@@ -110,15 +116,26 @@ def cmd_session(args):
         save_session_state(state)
         print(f"\nError: {exc}", file=sys.stderr)
         sys.exit(1)
+    finally:
+        release_gpu("__cli__")
 
 
 def cmd_queue(args):
     """Run all pending queue tasks."""
     from matting.runner import execute_queue
+    from gpu_lock import try_acquire_gpu, release_gpu
 
-    done, errors, timings = execute_queue(
-        progress_callback=_make_progress_callback(),
-    )
+    acquired, msg = try_acquire_gpu("__cli__", "CLI", "队列执行")
+    if not acquired:
+        print(f"Error: GPU is busy — {msg}", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        done, errors, timings = execute_queue(
+            progress_callback=_make_progress_callback(),
+        )
+    finally:
+        release_gpu("__cli__")
 
     if done == 0 and errors == 0:
         print("No pending tasks in queue.")
