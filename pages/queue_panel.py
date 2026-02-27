@@ -13,6 +13,8 @@ from task_queue.models import load_queue
 from task_queue.logic import (
     clear_queue,
     pack_download,
+    pin_to_bottom_from_queue,
+    pin_to_top_from_queue,
     queue_status_text,
     queue_table_rows,
     remove_from_queue,
@@ -98,6 +100,14 @@ def build_queue_panel(
         with queue_table.add_slot("body-cell-action"):
             with queue_table.cell("action"):
                 with ui.row().classes("gap-1"):
+                    ui.button("置顶", icon="vertical_align_top").props("flat dense size=sm").on(
+                        "click",
+                        js_handler="() => emit(props.row.session_id)",
+                        handler=lambda e: _on_queue_pin_top(
+                            refs,
+                            (e.args[0] if isinstance(e.args, (list, tuple)) and e.args else e.args),
+                        ),
+                    )
                     if panel_type == "matting":
                         ui.button("恢复", icon="edit").props("flat dense size=sm").on(
                             "click",
@@ -112,6 +122,14 @@ def build_queue_panel(
                         "click",
                         js_handler="() => emit(props.row.session_id)",
                         handler=lambda e: _on_queue_remove(
+                            refs,
+                            (e.args[0] if isinstance(e.args, (list, tuple)) and e.args else e.args),
+                        ),
+                    )
+                    ui.button("置底", icon="vertical_align_bottom").props("flat dense size=sm").on(
+                        "click",
+                        js_handler="() => emit(props.row.session_id)",
+                        handler=lambda e: _on_queue_pin_bottom(
                             refs,
                             (e.args[0] if isinstance(e.args, (list, tuple)) and e.args else e.args),
                         ),
@@ -288,6 +306,36 @@ def _run_execute_queue(refs, user_id, user_name, start_until_false_timer_fn):
         return True
 
     start_until_false_timer_fn(0.2, poll)
+
+
+def _on_queue_pin_top(refs, session_id):
+    """将指定任务移动到队列顶部（index 0）。"""
+    q = load_queue()
+    match_idx = next((i for i, item in enumerate(q) if item["sid"] == session_id), None)
+    if match_idx is None:
+        ui.notify("该任务已不在队列中", type="warning")
+        update_queue_ui(refs)
+        return
+    out = pin_to_top_from_queue(match_idx + 1, q)
+    refs["queue_status"].set_text(out["queue_status_text"])
+    refs["queue_table"].rows = build_queue_rows_with_sid()
+    update_queue_ui(refs)
+    apply_notify(out)
+
+
+def _on_queue_pin_bottom(refs, session_id):
+    """将指定任务移动到队列底部（最后一位）。"""
+    q = load_queue()
+    match_idx = next((i for i, item in enumerate(q) if item["sid"] == session_id), None)
+    if match_idx is None:
+        ui.notify("该任务已不在队列中", type="warning")
+        update_queue_ui(refs)
+        return
+    out = pin_to_bottom_from_queue(match_idx + 1, q)
+    refs["queue_status"].set_text(out["queue_status_text"])
+    refs["queue_table"].rows = build_queue_rows_with_sid()
+    update_queue_ui(refs)
+    apply_notify(out)
 
 
 def _on_pack(refs):

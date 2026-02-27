@@ -268,6 +268,66 @@ def remove_from_queue(remove_idx: int, queue_state: list[QueueItem]) -> dict[str
     }
 
 
+def pin_to_top_from_queue(pin_idx: int, queue_state: list[QueueItem]) -> dict[str, Any]:
+    """Move a queue item to position 0 (pin to top) by 1-based index."""
+    queue = load_queue()
+    idx = int(pin_idx) - 1
+    if idx < 0 or idx >= len(queue):
+        return {
+            "queue_state": queue,
+            "queue_status_text": queue_status_text(queue),
+            "queue_table_rows": queue_table_rows(queue),
+            "warning": f"无效序号: {int(pin_idx)}，队列共 {len(queue)} 项。",
+        }
+    if idx == 0:
+        return {
+            "queue_state": queue,
+            "queue_status_text": queue_status_text(queue),
+            "queue_table_rows": queue_table_rows(queue),
+            "info": "该任务已在队列顶部。",
+        }
+    item = queue[idx]
+    queue = [item, *queue[:idx], *queue[idx + 1:]]
+    save_queue(queue)
+    log.info("Pinned to top: %s session=%s", item["type"], item["sid"])
+    return {
+        "queue_state": queue,
+        "queue_status_text": queue_status_text(queue),
+        "queue_table_rows": queue_table_rows(queue),
+        "info": "已置顶。",
+    }
+
+
+def pin_to_bottom_from_queue(pin_idx: int, queue_state: list[QueueItem]) -> dict[str, Any]:
+    """Move a queue item to the last position (pin to bottom) by 1-based index."""
+    queue = load_queue()
+    idx = int(pin_idx) - 1
+    if idx < 0 or idx >= len(queue):
+        return {
+            "queue_state": queue,
+            "queue_status_text": queue_status_text(queue),
+            "queue_table_rows": queue_table_rows(queue),
+            "warning": f"无效序号: {int(pin_idx)}，队列共 {len(queue)} 项。",
+        }
+    if idx == len(queue) - 1:
+        return {
+            "queue_state": queue,
+            "queue_status_text": queue_status_text(queue),
+            "queue_table_rows": queue_table_rows(queue),
+            "info": "该任务已在队列底部。",
+        }
+    item = queue[idx]
+    queue = [*queue[:idx], *queue[idx + 1:], item]
+    save_queue(queue)
+    log.info("Pinned to bottom: %s session=%s", item["type"], item["sid"])
+    return {
+        "queue_state": queue,
+        "queue_status_text": queue_status_text(queue),
+        "queue_table_rows": queue_table_rows(queue),
+        "info": "已置底。",
+    }
+
+
 def clear_queue(queue_state: list[QueueItem]) -> dict[str, Any]:
     """Clear all items from the queue."""
     save_queue([])
