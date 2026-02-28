@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from tracking.logic import run_tracking
-from tracking.export import export_ae_keyframe_data
+from tracking.export import export_ae_keyframe_data, export_trajectory_summary
 from tracking.session_store import save_tracking_results, save_tracking_session
 
 log = logging.getLogger(__name__)
@@ -77,6 +77,14 @@ def run_tracking_task(
     state = export_result["session_state"]
     ae_export_path = export_result.get("export_path")
 
+    # 2a. Export summary trajectory (IQR-filtered average)
+    _progress(0.88, "生成整体轨迹...")
+    summary_result = export_trajectory_summary(state)
+    state = summary_result["session_state"]
+    s_notify = summary_result.get("notify")
+    if s_notify and s_notify[0] in ("error", "warning"):
+        log.warning("export_trajectory_summary: %s", s_notify[1])
+
     # 3. Save raw tracking results to disk
     save_tracking_results(state)
 
@@ -132,6 +140,11 @@ def upload_and_notify_tracking(
     # AE export
     if state.get("ae_export_path"):
         files_to_upload.append(Path(state["ae_export_path"]))
+    # Summary trajectory files
+    if state.get("ae_summary_txt_path"):
+        files_to_upload.append(Path(state["ae_summary_txt_path"]))
+    if state.get("ae_summary_jsx_path"):
+        files_to_upload.append(Path(state["ae_summary_jsx_path"]))
     # Original video
     if state.get("video_path"):
         files_to_upload.append(Path(state["video_path"]))

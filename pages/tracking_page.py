@@ -733,10 +733,38 @@ def tracking_page(client):
             if out.get("export_path"):
                 export_path = Path(out["export_path"])
                 rel = export_path.relative_to(WORKSPACE_DIR)
-                ui.download(f"/workspace/{rel}", filename="ae_tracking_keyframes.txt")
+                ui.download(f"/workspace/{rel}", filename="ae_原始轨迹.txt")
 
         ui.button("导出 After Effects 关键帧", on_click=on_ae_export, icon="download")
         ui.label("导出 Adobe After Effects 关键帧数据（.txt），可直接粘贴到 AE。").classes("text-xs text-gray-400")
+
+        async def on_summary_txt_export():
+            txt_path = page_state["tracking"].get("ae_summary_txt_path", "")
+            if not txt_path or not Path(txt_path).exists():
+                ui.notify("整体轨迹尚未生成，请先运行追踪。", type="warning")
+                return
+            try:
+                rel = Path(txt_path).relative_to(WORKSPACE_DIR)
+            except ValueError:
+                ui.notify("文件路径异常。", type="negative")
+                return
+            ui.download(f"/workspace/{rel}", filename="ae_整体轨迹.txt")
+
+        async def on_summary_jsx_export():
+            jsx_path = page_state["tracking"].get("ae_summary_jsx_path", "")
+            if not jsx_path or not Path(jsx_path).exists():
+                ui.notify("整体轨迹尚未生成，请先运行追踪。", type="warning")
+                return
+            try:
+                rel = Path(jsx_path).relative_to(WORKSPACE_DIR)
+            except ValueError:
+                ui.notify("文件路径异常。", type="negative")
+                return
+            ui.download(f"/workspace/{rel}", filename="ae_整体轨迹.jsx")
+
+        ui.button("导出整体轨迹 TXT", on_click=on_summary_txt_export, icon="timeline")
+        ui.button("导出整体轨迹 JSX", on_click=on_summary_jsx_export, icon="code")
+        ui.label("整体轨迹：IQR 离群点剔除后各帧平均位置，适合跟踪物体整体运动。").classes("text-xs text-gray-400")
 
     ui.separator()
 

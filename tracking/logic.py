@@ -58,6 +58,9 @@ def empty_tracking_state() -> dict[str, Any]:
         # Raw tracking results for AE export
         "raw_tracks": None,
         "raw_visibility": None,
+        "ae_export_path": "",
+        "ae_summary_txt_path": "",
+        "ae_summary_jsx_path": "",
         # Task queue state
         "task_status": "",
         "error_msg": "",
