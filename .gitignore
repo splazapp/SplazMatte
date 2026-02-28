@@ -55,6 +55,9 @@ weights/
 # Gradio
 .gradio/
 
+# NiceGUI runtime data
+.nicegui/
+
 # OS
 .DS_Store
 Thumbs.db
