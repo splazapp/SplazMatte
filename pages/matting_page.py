@@ -43,6 +43,9 @@ from matting.logic import (
     delete_keyframe,
     frame_click,
     undo_click,
+    generate_tracking_points,
+    clear_tracking_points_and_mask,
+    get_linked_ae_export,
 )
 from task_queue.logic import add_to_queue
 from gpu_lock import try_acquire_gpu, release_gpu, get_gpu_status
@@ -338,6 +341,40 @@ def matting_page(client):
             ui.button("保存关键帧", on_click=on_save_kf).props("color=primary")
             ui.button("删除关键帧", on_click=on_del_kf)
 
+        # 追踪点生成控件（利用 SAM mask 直接生成追踪点）
+        with ui.row().classes("gap-4 flex-wrap items-center mb-2"):
+            tracking_num_pts = ui.number(
+                "Mask 内追踪点数", value=30, min=5, max=200, step=5
+            ).classes("w-40").props("dense outlined")
+            refs["tracking_num_pts"] = tracking_num_pts
+
+            async def on_gen_tracking_pts():
+                try:
+                    num = int(refs["tracking_num_pts"].value or 30)
+                except (TypeError, ValueError):
+                    num = 30
+                out = await run.io_bound(generate_tracking_points, page_state["session"], num)
+                page_state["session"] = out["session_state"]
+                apply_notify(out)
+
+            async def on_clear_mask_tracking():
+                if "annotation_loading_overlay" in refs:
+                    refs["annotation_loading_overlay"].set_visibility(True)
+                try:
+                    out = await run.io_bound(clear_tracking_points_and_mask, page_state["session"])
+                    page_state["session"] = out["session_state"]
+                    if out.get("frame_image") is not None:
+                        refs["frame_image"].set_source(write_frame_preview(out["frame_image"], user_id))
+                    apply_notify(out)
+                finally:
+                    if "annotation_loading_overlay" in refs:
+                        refs["annotation_loading_overlay"].set_visibility(False)
+
+            ui.button(
+                "重新从 MASK 生成追踪点", on_click=on_gen_tracking_pts, icon="scatter_plot"
+            ).props("color=primary")
+            ui.button("清除 MASK 和追踪点", on_click=on_clear_mask_tracking, icon="clear")
+
         # 帧滑块 + 帧号输入框
         with ui.row().classes("w-full items-center gap-2 mb-2"):
             frame_slider = ui.slider(min=0, max=1, value=0, step=1).props("label-always").classes("flex-1")
@@ -602,7 +639,7 @@ def matting_page(client):
                     on_click=lambda: _on_matting_run_stop(refs, matting_progress, page_state, user_id, user_name),
                 ).props("color=primary")
                 refs["matting_run_btn"] = matting_run_btn
-                ui.button("添加到队列", on_click=lambda: _on_add_queue(refs, page_state, user_id))
+                ui.button("添加到队列", on_click=lambda: asyncio.ensure_future(_on_add_queue(refs, page_state, user_id)))
                 ui.label("'添加到队列' 可批量处理多个任务").classes("text-xs text-gray-400 self-center")
 
     # 抠像结果预览
@@ -617,6 +654,23 @@ def matting_page(client):
             ui.label("提取的前景，可直接用于合成").classes("text-xs text-gray-400")
             fgr_video = ui.video("").classes("max-h-48 w-full")
             refs["fgr_video"] = fgr_video
+
+    # AE 关键帧导出（仅当有联动追踪任务时可用）
+    async def on_ae_export():
+        ae_path = await run.io_bound(get_linked_ae_export, page_state["session"])
+        if ae_path is None:
+            ui.notify("未找到 AE 关键帧文件。请确认已设置追踪点并执行了队列。", type="warning")
+            return
+        try:
+            rel = Path(ae_path).relative_to(WORKSPACE_DIR)
+        except ValueError:
+            log.error("ae_export_path not under WORKSPACE_DIR: %s", ae_path)
+            ui.notify("AE 文件路径异常，无法导出。", type="negative")
+            return
+        ui.download(f"/workspace/{rel}", filename="ae_tracking_keyframes.txt")
+
+    ui.button("导出 AFTER EFFECTS 关键帧", on_click=on_ae_export, icon="download").props("color=primary")
+    ui.label("追踪任务执行完成后可导出 AE 关键帧数据（.txt），可直接粘贴到 After Effects。").classes("text-xs text-gray-400")
 
     # 处理日志
     with ui.expansion("处理日志", icon="terminal").classes("w-full"):
@@ -731,9 +785,11 @@ def matting_page(client):
 
         _start_until_false_timer(0.2, poll)
 
-    def _on_add_queue(r: dict, ps: dict, uid: str) -> None:
+    async def _on_add_queue(r: dict, ps: dict, uid: str) -> None:
         q = load_queue()
-        out = add_to_queue(
+        # Use io_bound: _maybe_add_tracking_task calls preprocess_video (I/O heavy)
+        out = await run.io_bound(
+            add_to_queue,
             r["matting_engine_selector"].value,
             int(r["erode_slider"].value), int(r["dilate_slider"].value),
             int(r["vm_batch_slider"].value), int(r["vm_overlap_slider"].value), int(r["vm_seed_input"].value),

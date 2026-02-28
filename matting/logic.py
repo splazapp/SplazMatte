@@ -623,6 +623,86 @@ def text_prompt(prompt: str, state: dict) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# AE export lookup for linked tracking session
+# ---------------------------------------------------------------------------
+def get_linked_ae_export(state: dict) -> str | None:
+    """Return the AE export file path for the linked tracking session, if available.
+
+    Args:
+        state: Matting session state (may contain linked_tracking_sid).
+
+    Returns:
+        Path string to ae_export_*.txt, or None if not available.
+    """
+    from tracking.session_store import load_tracking_session
+    tsid = state.get("linked_tracking_sid", "")
+    if not tsid:
+        return None
+    tracking = load_tracking_session(tsid)
+    if tracking is None:
+        return None
+    ae_path_str = tracking.get("ae_export_path", "")
+    if ae_path_str and Path(ae_path_str).exists():
+        return ae_path_str
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Tracking point generation from SAM mask
+# ---------------------------------------------------------------------------
+def generate_tracking_points(state: dict, num_points: int) -> dict[str, Any]:
+    """从当前帧 SAM mask 生成追踪点，存储在 state["tracking_keypoints"] 中。
+
+    Args:
+        state: Current matting session state (must have current_mask set).
+        num_points: 期望生成的追踪点数量。
+
+    Returns:
+        Dict with session_state and notify.
+    """
+    if state.get("current_mask") is None:
+        return {"session_state": state, "notify": ("warning", "请先标注当前帧获得 Mask。")}
+
+    from tracking.logic import mask_to_points
+    pts = mask_to_points(state["current_mask"], num_points)
+
+    if not pts:
+        return {"session_state": state, "notify": ("warning", "无法从 Mask 生成追踪点，Mask 太小。")}
+
+    frame_idx = state["current_frame_idx"]
+    state["tracking_keypoints"][frame_idx] = [(float(x), float(y)) for x, y in pts]
+    state["tracking_num_points"] = num_points
+    save_session_state(state)
+
+    return {
+        "session_state": state,
+        "notify": ("positive", f"已在第 {frame_idx} 帧生成 {len(pts)} 个追踪点"),
+    }
+
+
+def clear_tracking_points_and_mask(state: dict) -> dict[str, Any]:
+    """清除当前帧的 SAM 标注（点+Mask）和追踪点。
+
+    Args:
+        state: Current matting session state.
+
+    Returns:
+        Dict with session_state and frame_image.
+    """
+    if state["frames_dir"] is None:
+        return {"session_state": state, "frame_image": None}
+
+    frame_idx = state["current_frame_idx"]
+    state["click_points"] = []
+    state["click_labels"] = []
+    state["current_mask"] = None
+    _sync_frame_clicks(state)
+    state["tracking_keypoints"].pop(frame_idx, None)
+    save_session_state(state)
+    return {"session_state": state, "frame_image": render_frame(state)}
+
+
+# ---------------------------------------------------------------------------
 # Matting (long-running)
 # ---------------------------------------------------------------------------
 def start_matting(

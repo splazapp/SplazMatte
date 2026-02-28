@@ -741,67 +741,32 @@ def _farthest_point_sample(
     return result
 
 
-def generate_points_from_mask(
-    state: dict,
-    num_points: int = 30,
-) -> dict[str, Any]:
-    """在 SAM mask 内智能生成追踪点。
+def mask_to_points(mask: np.ndarray, num_points: int = 30) -> list[tuple[float, float]]:
+    """从二值 mask 生成追踪点（原始坐标系）。
 
     使用连通域分析按面积分配点数，每个区域 40% 边缘 + 60% 内部。
     边缘点沿轮廓等弧长采样，内部点使用距离变换加权最远点采样。
 
     Args:
-        state: Current tracking state (must contain sam_mask).
+        mask: 二值或灰度 mask（>127 视为前景）。
         num_points: 期望生成的追踪点数量。
 
     Returns:
-        Dict with session_state, preview_frame, query_count, notify.
+        追踪点列表 [(x, y), ...]，坐标在 mask 坐标系下。
     """
-    if state.get("sam_mask") is None:
-        return {
-            "session_state": state,
-            "notify": ("warning", "请先用 SAM 选择目标区域"),
-        }
+    if num_points <= 0:
+        return []
 
-    mask = state["sam_mask"]
     binary = (mask > 127).astype(np.uint8)
     total_area = int(binary.sum())
 
-    # 每次生成前清空当前帧已有的追踪点，避免重复点击累积
-    frame_idx = state["current_frame"]
-    state["query_points"][frame_idx] = []
-    state["query_colors"][frame_idx] = []
-
     if total_area < 5:
-        return {
-            "session_state": state,
-            "notify": ("warning", "Mask 太小，请重新选择目标"),
-        }
+        return []
 
     # 极小 mask：只放质心
     if total_area < 20:
         ys, xs = np.where(binary)
-        cx, cy = float(xs.mean()), float(ys.mean())
-        import matplotlib
-        cmap = matplotlib.colormaps.get_cmap("gist_rainbow")
-        offset = len(state["query_points"][frame_idx])
-        color = cmap(offset % 20 / 20)
-        color_rgb = (int(color[0] * 255), int(color[1] * 255), int(color[2] * 255))
-        state["query_points"][frame_idx].append((cx, cy, frame_idx))
-        state["query_colors"][frame_idx].append(color_rgb)
-        state["query_count"] = _effective_point_count(state)
-        preview = _render_sam_preview(state)
-        for pt, col in zip(
-            state["query_points"][frame_idx], state["query_colors"][frame_idx]
-        ):
-            px, py, _ = pt
-            cv2.circle(preview, (int(px), int(py)), 4, col, -1)
-        return {
-            "session_state": state,
-            "preview_frame": preview,
-            "query_count": state["query_count"],
-            "notify": ("positive", "Mask 极小，已在质心放置 1 个追踪点"),
-        }
+        return [(float(xs.mean()), float(ys.mean()))]
 
     # 连通域分析 → 按面积分配点数
     num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary)
@@ -811,10 +776,7 @@ def generate_points_from_mask(
         if stats[i, cv2.CC_STAT_AREA] >= 10
     ]
     if not valid:
-        return {
-            "session_state": state,
-            "notify": ("warning", "Mask 太小，请重新选择目标"),
-        }
+        return []
 
     total_valid = sum(a for _, a in valid)
     alloc = {i: max(1, round(num_points * a / total_valid)) for i, a in valid}
@@ -845,6 +807,73 @@ def generate_points_from_mask(
 
         all_points.extend(edge_pts)
         all_points.extend(interior_pts)
+
+    # Clamp to num_points in case alloc correction was insufficient (many small regions)
+    return all_points[:num_points]
+
+
+def generate_points_from_mask(
+    state: dict,
+    num_points: int = 30,
+) -> dict[str, Any]:
+    """在 SAM mask 内智能生成追踪点。
+
+    使用连通域分析按面积分配点数，每个区域 40% 边缘 + 60% 内部。
+    边缘点沿轮廓等弧长采样，内部点使用距离变换加权最远点采样。
+
+    Args:
+        state: Current tracking state (must contain sam_mask).
+        num_points: 期望生成的追踪点数量。
+
+    Returns:
+        Dict with session_state, preview_frame, query_count, notify.
+    """
+    if state.get("sam_mask") is None:
+        return {
+            "session_state": state,
+            "notify": ("warning", "请先用 SAM 选择目标区域"),
+        }
+
+    mask = state["sam_mask"]
+
+    # 每次生成前清空当前帧已有的追踪点，避免重复点击累积
+    frame_idx = state["current_frame"]
+    state["query_points"][frame_idx] = []
+    state["query_colors"][frame_idx] = []
+
+    all_points = mask_to_points(mask, num_points)
+
+    if not all_points:
+        return {
+            "session_state": state,
+            "notify": ("warning", "Mask 太小，请重新选择目标"),
+        }
+
+    if len(all_points) == 1:
+        # 极小 mask（质心单点）情况下给出特殊提示
+        binary = (mask > 127).astype(np.uint8)
+        if int(binary.sum()) < 20:
+            import matplotlib
+            cmap = matplotlib.colormaps.get_cmap("gist_rainbow")
+            offset = len(state["query_points"][frame_idx])
+            color = cmap(offset % 20 / 20)
+            color_rgb = (int(color[0] * 255), int(color[1] * 255), int(color[2] * 255))
+            x, y = all_points[0]
+            state["query_points"][frame_idx].append((x, y, frame_idx))
+            state["query_colors"][frame_idx].append(color_rgb)
+            state["query_count"] = _effective_point_count(state)
+            preview = _render_sam_preview(state)
+            for pt, col in zip(
+                state["query_points"][frame_idx], state["query_colors"][frame_idx]
+            ):
+                px, py, _ = pt
+                cv2.circle(preview, (int(px), int(py)), 4, col, -1)
+            return {
+                "session_state": state,
+                "preview_frame": preview,
+                "query_count": state["query_count"],
+                "notify": ("positive", "Mask 极小，已在质心放置 1 个追踪点"),
+            }
 
     # 添加到 state（复用现有颜色分配逻辑）
     import matplotlib

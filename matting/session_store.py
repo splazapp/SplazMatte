@@ -59,6 +59,9 @@ def empty_state() -> dict:
         "seed": VIDEOMAMA_SEED,
         "task_status": "",
         "error_msg": "",
+        "tracking_keypoints": {},
+        "tracking_num_points": 30,
+        "linked_tracking_sid": "",
     }
 
 
@@ -101,6 +104,11 @@ def save_session_state(state: dict) -> None:
         "processing_time": state.get("processing_time", 0.0),
         "start_time": state.get("start_time", ""),
         "end_time": state.get("end_time", ""),
+        "tracking_keypoints": {
+            str(k): v for k, v in state.get("tracking_keypoints", {}).items()
+        },
+        "tracking_num_points": state.get("tracking_num_points", 30),
+        "linked_tracking_sid": state.get("linked_tracking_sid", ""),
     }
     (session_dir / "state.json").write_text(
         json.dumps(data, ensure_ascii=False, indent=2),
@@ -231,6 +239,12 @@ def load_session(session_id: str) -> dict | None:
     # Restore per-frame click data (keys stored as strings in JSON)
     saved_fc = saved.get("frame_clicks", {})
     state["frame_clicks"] = {int(k): v for k, v in saved_fc.items()}
+
+    # Restore tracking keypoints and linked tracking session
+    raw_tkp = saved.get("tracking_keypoints", {})
+    state["tracking_keypoints"] = {int(k): v for k, v in raw_tkp.items()}
+    state["tracking_num_points"] = saved.get("tracking_num_points", 30)
+    state["linked_tracking_sid"] = saved.get("linked_tracking_sid", "")
 
     # Load mask data (directory may not exist for sessions without keyframes)
     masks_dir = session_dir / "masks"

@@ -62,6 +62,7 @@ def save_tracking_session(state: dict) -> None:
         "processing_time": state.get("processing_time", 0.0),
         "start_time": state.get("start_time", ""),
         "end_time": state.get("end_time", ""),
+        "ae_export_path": state.get("ae_export_path", ""),
     }
     (session_dir / "state.json").write_text(
         json.dumps(data, ensure_ascii=False, indent=2),
@@ -155,6 +156,7 @@ def load_tracking_session(sid: str) -> dict | None:
     state["processing_time"] = saved.get("processing_time", 0.0)
     state["start_time"] = saved.get("start_time", "")
     state["end_time"] = saved.get("end_time", "")
+    state["ae_export_path"] = saved.get("ae_export_path", "")
 
     # Note: preview_frames.npy and input_frames.npy are NOT loaded into
     # state. They are loaded on demand by _load_all_preview_frames() and

@@ -128,6 +128,92 @@ def load_queue_display() -> dict[str, Any]:
     }
 
 
+def _maybe_add_tracking_task(session_state: dict, queue: list) -> str:
+    """若 matting session 有设置追踪关键帧，则创建并添加追踪任务。
+
+    Args:
+        session_state: 已完成保存的 matting session state。
+        queue: 当前队列列表（会被原地追加）。
+
+    Returns:
+        新建追踪 session 的 ID，若未创建则返回空字符串。
+    """
+    tracking_kp = session_state.get("tracking_keypoints", {})
+    if not tracking_kp:
+        return ""
+
+    from tracking.logic import preprocess_video, empty_tracking_state
+    import colorsys
+
+    video_path = session_state.get("source_video_path")
+    if not video_path or not Path(video_path).exists():
+        log.warning("No source video for tracking task, skip.")
+        return ""
+
+    # 预处理视频，创建追踪 session
+    tracking_state = empty_tracking_state()
+    result = preprocess_video(str(video_path), tracking_state)
+    if result.get("notify", ("", ""))[0] == "error":
+        log.warning("preprocess_video failed for tracking task: %s", result)
+        return ""
+
+    tracking_state = result["session_state"]
+
+    # 坐标转换：原始分辨率 → 追踪预览分辨率
+    orig_h = session_state.get("video_height", 0)
+    orig_w = session_state.get("video_width", 0)
+    if orig_h == 0 or orig_w == 0:
+        log.warning("Invalid video dimensions, skip tracking task.")
+        return ""
+
+    prev_h, prev_w = tracking_state["preview_size"]
+    if prev_h == 0 or prev_w == 0:
+        log.warning("Invalid preview dimensions, skip tracking task.")
+        return ""
+    num_frames = tracking_state["num_frames"]
+
+    for frame_idx_raw, pts in tracking_kp.items():
+        frame_idx = int(frame_idx_raw)
+        if frame_idx >= num_frames:
+            continue
+
+        converted = []
+        colors = []
+        for i, (x, y) in enumerate(pts):
+            tx = float(x) * prev_w / orig_w
+            ty = float(y) * prev_h / orig_h
+            converted.append((tx, ty, frame_idx))
+            hue = (i / max(len(pts), 1)) % 1.0
+            r, g, b = colorsys.hls_to_rgb(hue, 0.55, 0.9)
+            colors.append((int(r * 255), int(g * 255), int(b * 255)))
+
+        tracking_state["query_points"][frame_idx] = converted
+        tracking_state["query_colors"][frame_idx] = colors
+        tracking_state["keyframes"][frame_idx] = {
+            "points": converted,
+            "colors": colors,
+        }
+
+    tracking_state["query_count"] = sum(
+        len(v) for v in tracking_state["query_points"] if v
+    )
+    tracking_state["task_status"] = "pending"
+    tracking_state["error_msg"] = ""
+    save_tracking_session(tracking_state)
+
+    tsid = tracking_state["session_id"]
+    new_item: QueueItem = {"type": "tracking", "sid": tsid}
+    if not any(item["sid"] == tsid for item in queue):
+        queue.append(new_item)
+
+    log.info(
+        "Auto-added tracking task: sid=%s, keyframes=%d",
+        tsid,
+        len(tracking_kp),
+    )
+    return tsid
+
+
 def add_to_queue(
     matting_engine: str,
     erode: int,
@@ -164,7 +250,13 @@ def add_to_queue(
     new_item: QueueItem = {"type": "matting", "sid": sid}
     if not any(item["sid"] == sid for item in queue):
         queue.append(new_item)
+    linked_tsid = _maybe_add_tracking_task(session_state, queue)
     save_queue(queue)
+
+    # Write back-reference only after queue is successfully persisted
+    if linked_tsid:
+        session_state["linked_tracking_sid"] = linked_tsid
+        save_session_state(session_state)
 
     log.info(
         "Added to queue: session=%s, video=%s, keyframes=%d, engine=%s",
