@@ -215,7 +215,9 @@ def refresh_gallery(
                 if frame_idx is not None and on_click_frame is not None:
                     def make_click_handler(fidx):
                         def handler():
-                            asyncio.create_task(on_click_frame(fidx))
+                            result = on_click_frame(fidx)
+                            if asyncio.iscoroutine(result):
+                                asyncio.create_task(result)
                         return handler
                     kf_image.on("click", make_click_handler(frame_idx))
                     kf_label.on("click", make_click_handler(frame_idx))
