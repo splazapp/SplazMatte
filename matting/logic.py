@@ -140,12 +140,12 @@ def render_frame(state: dict) -> np.ndarray:
         ]
         frame = draw_points(frame, preview_pts, state["click_labels"])
 
-    # 绘制追踪点（蓝色小圆点，与 tracking page 一致）
+    # 绘制追踪点（黄色小圆点）
     tkpts = state.get("tracking_keypoints", {}).get(state["current_frame_idx"], [])
     for tx, ty in tkpts:
         px = int(round(tx * scale_x))
         py = int(round(ty * scale_y))
-        cv2.circle(frame, (px, py), 4, (0, 120, 255), -1)
+        cv2.circle(frame, (px, py), 4, (0, 255, 255), -1)
 
     return frame
 
