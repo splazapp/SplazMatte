@@ -57,6 +57,7 @@ from pages.shared_ui import (
     get_user_name_from_request,
     refresh_gallery,
     apply_notify,
+    apply_tracking_notify,
     build_queue_rows_with_sid,
     get_session_state,
     save_session_id,
@@ -353,9 +354,16 @@ def matting_page(client):
                     num = int(refs["tracking_num_pts"].value or 30)
                 except (TypeError, ValueError):
                     num = 30
-                out = await run.io_bound(generate_tracking_points, page_state["session"], num)
+                try:
+                    out = await run.io_bound(generate_tracking_points, page_state["session"], num)
+                except Exception as ex:
+                    log.exception("Generate tracking points failed")
+                    ui.notify(f"生成追踪点失败: {ex}", type="negative")
+                    return
                 page_state["session"] = out["session_state"]
-                apply_notify(out)
+                if out.get("frame_image") is not None:
+                    refs["frame_image"].set_source(write_frame_preview(out["frame_image"], user_id))
+                apply_tracking_notify(out)
 
             async def on_clear_mask_tracking():
                 if "annotation_loading_overlay" in refs:

@@ -130,14 +130,23 @@ def render_frame(state: dict) -> np.ndarray:
     if (prev_h, prev_w) != (orig_h, orig_w):
         frame = cv2.resize(frame, (prev_w, prev_h), interpolation=cv2.INTER_LINEAR)
 
+    scale_x = prev_w / orig_w
+    scale_y = prev_h / orig_h
+
     if state["click_points"]:
-        scale_x = prev_w / orig_w
-        scale_y = prev_h / orig_h
         preview_pts = [
             [int(round(px * scale_x)), int(round(py * scale_y))]
             for px, py in state["click_points"]
         ]
         frame = draw_points(frame, preview_pts, state["click_labels"])
+
+    # 绘制追踪点（蓝色小圆点，与 tracking page 一致）
+    tkpts = state.get("tracking_keypoints", {}).get(state["current_frame_idx"], [])
+    for tx, ty in tkpts:
+        px = int(round(tx * scale_x))
+        py = int(round(ty * scale_y))
+        cv2.circle(frame, (px, py), 4, (0, 120, 255), -1)
+
     return frame
 
 
@@ -676,6 +685,7 @@ def generate_tracking_points(state: dict, num_points: int) -> dict[str, Any]:
 
     return {
         "session_state": state,
+        "frame_image": render_frame(state),
         "notify": ("positive", f"已在第 {frame_idx} 帧生成 {len(pts)} 个追踪点"),
     }
 
