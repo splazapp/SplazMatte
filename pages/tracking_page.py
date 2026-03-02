@@ -359,7 +359,7 @@ def tracking_page(client):
 
             # SAM 回调
             async def on_sam_undo():
-                acquired, msg = try_acquire_gpu(user_id, user_name, "SAM 撤销")
+                acquired, msg = try_acquire_gpu(user_id, user_name, "SAM 撤销", category="interactive")
                 if not acquired:
                     ui.notify(msg, type="warning")
                     return
@@ -370,7 +370,7 @@ def tracking_page(client):
                     if out.get("preview_frame") is not None:
                         refs["frame_image"].set_source(write_tracking_preview(out["preview_frame"], user_id))
                 finally:
-                    release_gpu(user_id)
+                    release_gpu(user_id, category="interactive")
                     refs["loading_overlay"].set_visibility(False)
 
             async def on_sam_clear():
@@ -484,7 +484,7 @@ def tracking_page(client):
                 return
 
             if mode == "SAM目标选择":
-                acquired, msg = try_acquire_gpu(user_id, user_name, "SAM 选择")
+                acquired, msg = try_acquire_gpu(user_id, user_name, "SAM 选择", category="interactive")
                 if not acquired:
                     ui.notify(msg, type="warning")
                     return
@@ -505,7 +505,7 @@ def tracking_page(client):
                     log.exception("SAM prediction failed")
                     ui.notify(f"SAM 推理失败: {ex}", type="negative")
                 finally:
-                    release_gpu(user_id)
+                    release_gpu(user_id, category="interactive")
                     refs["loading_overlay"].set_visibility(False)
                     click_state["busy"] = False
                 return

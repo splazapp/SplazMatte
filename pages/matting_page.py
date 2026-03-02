@@ -287,7 +287,7 @@ def matting_page(client):
             ui.label("Positive=选中目标，Negative=排除区域").classes("text-xs text-gray-400")
 
             async def on_undo():
-                acquired, msg = try_acquire_gpu(user_id, user_name, "撤销标注")
+                acquired, msg = try_acquire_gpu(user_id, user_name, "撤销标注", category="interactive")
                 if not acquired:
                     ui.notify(msg, type="warning")
                     return
@@ -300,7 +300,7 @@ def matting_page(client):
                         refs["frame_image"].set_source(write_frame_preview(out["frame_image"], user_id))
                     apply_notify(out)
                 finally:
-                    release_gpu(user_id)
+                    release_gpu(user_id, category="interactive")
                     if "annotation_loading_overlay" in refs:
                         refs["annotation_loading_overlay"].set_visibility(False)
 
@@ -435,7 +435,7 @@ def matting_page(client):
                         return
 
                     # 尝试获取 GPU 锁
-                    acquired, msg = try_acquire_gpu(user_id, user_name, "SAM 标注")
+                    acquired, msg = try_acquire_gpu(user_id, user_name, "SAM 标注", category="interactive")
                     if not acquired:
                         ui.notify(msg, type="warning")
                         return
@@ -459,7 +459,7 @@ def matting_page(client):
                         log.exception("Frame annotation failed")
                         ui.notify(f"标注失败: {ex}", type="negative")
                     finally:
-                        release_gpu(user_id)
+                        release_gpu(user_id, category="interactive")
                         refs["annotation_loading_overlay"].set_visibility(False)
                         click_state["busy"] = False
 
@@ -485,7 +485,7 @@ def matting_page(client):
                     text_prompt_input = ui.input(label="文本提示词", placeholder="person, car, dog...").classes("flex-1")
 
                     async def on_text_detect():
-                        acquired, msg = try_acquire_gpu(user_id, user_name, "文本检测")
+                        acquired, msg = try_acquire_gpu(user_id, user_name, "文本检测", category="interactive")
                         if not acquired:
                             ui.notify(msg, type="warning")
                             return
@@ -500,7 +500,7 @@ def matting_page(client):
                             log.exception("Text detection failed")
                             ui.notify(f"文本检测失败: {ex}", type="negative")
                         finally:
-                            release_gpu(user_id)
+                            release_gpu(user_id, category="interactive")
                             refs["annotation_loading_overlay"].set_visibility(False)
 
                     ui.button("检测", on_click=on_text_detect).props("color=primary")
@@ -517,7 +517,7 @@ def matting_page(client):
 
         # 模型切换回调
         async def on_model_val():
-            acquired, msg = try_acquire_gpu(user_id, user_name, "模型切换")
+            acquired, msg = try_acquire_gpu(user_id, user_name, "模型切换", category="interactive")
             if not acquired:
                 ui.notify(msg, type="warning")
                 return
@@ -530,7 +530,7 @@ def matting_page(client):
                 if out.get("frame_image") is not None:
                     refs["frame_image"].set_source(write_frame_preview(out["frame_image"], user_id))
             finally:
-                release_gpu(user_id)
+                release_gpu(user_id, category="interactive")
                 if "annotation_loading_overlay" in refs:
                     refs["annotation_loading_overlay"].set_visibility(False)
         model_selector.on("update:model-value", on_model_val)
