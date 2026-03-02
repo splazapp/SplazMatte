@@ -152,6 +152,13 @@ def upload_and_notify_tracking(
     files_to_upload = [f for f in files_to_upload if f.exists()]
     cdn_urls = upload_session(sid, files_to_upload) if files_to_upload else {}
 
+    # 将 CDN 链接中的物理文件名 (source.mp4) 替换为原始文件名，
+    # 使飞书通知中的下载链接对用户更友好
+    original_fn = state.get("original_filename", "")
+    video_path_name = Path(state.get("video_path", "")).name
+    if original_fn and video_path_name and video_path_name in cdn_urls:
+        cdn_urls[original_fn] = cdn_urls.pop(video_path_name)
+
     from utils.feishu_notify import send_feishu_tracking_success
 
     orig_h, orig_w = state.get("original_size", (0, 0))

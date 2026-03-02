@@ -52,6 +52,16 @@ def upload_and_notify(
 
     cdn_urls = upload_session(state["session_id"], files_to_upload)
 
+    # 将 CDN 链接中的物理文件名 (source.mp4) 替换为原始文件名
+    source_video_name = (
+        Path(state["source_video_path"]).name
+        if state.get("source_video_path")
+        else ""
+    )
+    original_fn = state.get("original_filename", "")
+    if original_fn and source_video_name and source_video_name in cdn_urls:
+        cdn_urls[original_fn] = cdn_urls.pop(source_video_name)
+
     source_name = state.get("original_filename") or (
         Path(state["source_video_path"]).name
         if state.get("source_video_path")

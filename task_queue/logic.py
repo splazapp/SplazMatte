@@ -159,8 +159,10 @@ def _maybe_add_tracking_task(session_state: dict, queue: list) -> str:
 
     tracking_state = result["session_state"]
     # 使用抠像任务的原始视频名，而非本地保存的 source.mp4
-    tracking_state["original_filename"] = session_state.get(
-        "original_filename", Path(str(video_path)).name
+    # 用 or 而非 dict.get 默认值，确保空字符串也走 fallback
+    tracking_state["original_filename"] = (
+        session_state.get("original_filename")
+        or Path(str(video_path)).name
     )
 
     # 坐标转换：原始分辨率 → 追踪预览分辨率
