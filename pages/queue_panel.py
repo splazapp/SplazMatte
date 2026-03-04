@@ -18,6 +18,7 @@ from task_queue.logic import (
     queue_status_text,
     queue_table_rows,
     remove_from_queue,
+    reset_single_status,
     reset_status,
     restore_from_queue,
     run_execute_queue,
@@ -108,6 +109,14 @@ def build_queue_panel(
                             (e.args[0] if isinstance(e.args, (list, tuple)) and e.args else e.args),
                         ),
                     )
+                    ui.button("重置", icon="restart_alt").props("flat dense size=sm").on(
+                        "click",
+                        js_handler="() => emit(props.row.session_id)",
+                        handler=lambda e: _on_queue_reset_single(
+                            refs,
+                            (e.args[0] if isinstance(e.args, (list, tuple)) and e.args else e.args),
+                        ),
+                    )
                     if panel_type == "matting":
                         ui.button("恢复", icon="edit").props("flat dense size=sm").on(
                             "click",
@@ -159,7 +168,7 @@ def build_queue_panel(
             ui.button("飞书通知", on_click=lambda: apply_notify(send_feishu(load_queue()))).props("outline")
             ui.button("打包下载", on_click=lambda: _on_pack(refs)).props("outline")
 
-        hint = "恢复: 重新编辑该任务 | 移除: 从队列删除 | 新任务加入后自动继续执行" if panel_type == "matting" else "新任务加入后自动继续执行。"
+        hint = "重置: 将状态改回待处理 | 恢复: 重新编辑该任务 | 移除: 从队列删除 | 新任务加入后自动继续执行" if panel_type == "matting" else "重置: 将状态改回待处理 | 新任务加入后自动继续执行。"
         ui.label(hint).classes("text-xs text-gray-400 mt-1")
 
     # 自动刷新队列 UI（多用户可见性）
@@ -306,6 +315,15 @@ def _run_execute_queue(refs, user_id, user_name, start_until_false_timer_fn):
         return True
 
     start_until_false_timer_fn(0.2, poll)
+
+
+def _on_queue_reset_single(refs, session_id):
+    """将指定任务的运行状态重置为 pending。"""
+    out = reset_single_status(session_id)
+    refs["queue_status"].set_text(out["queue_status_text"])
+    refs["queue_table"].rows = build_queue_rows_with_sid()
+    update_queue_ui(refs)
+    apply_notify(out)
 
 
 def _on_queue_pin_top(refs, session_id):

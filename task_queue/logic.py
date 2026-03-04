@@ -661,6 +661,46 @@ def reset_status(queue_state: list[QueueItem]) -> dict[str, Any]:
     }
 
 
+def reset_single_status(session_id: str) -> dict[str, Any]:
+    """Reset a single queue task to pending by session_id.
+
+    Args:
+        session_id: The session ID of the task to reset.
+
+    Returns:
+        Dict with updated queue state and notification info.
+    """
+    queue = load_queue()
+    item = next((i for i in queue if i["sid"] == session_id), None)
+    if item is None:
+        return {
+            "queue_state": queue,
+            "queue_status_text": queue_status_text(queue),
+            "queue_table_rows": queue_table_rows(queue),
+            "warning": "该任务已不在队列中。",
+        }
+
+    if item["type"] == "tracking":
+        loaded = load_tracking_session(item["sid"])
+        if loaded:
+            loaded["task_status"] = "pending"
+            loaded["error_msg"] = ""
+            save_tracking_session(loaded)
+    else:
+        loaded = load_session(item["sid"])
+        if loaded:
+            loaded["task_status"] = "pending"
+            loaded["error_msg"] = ""
+            save_session_state(loaded)
+
+    return {
+        "queue_state": queue,
+        "queue_status_text": queue_status_text(queue),
+        "queue_table_rows": queue_table_rows(queue),
+        "info": "已重置该任务为待处理状态。",
+    }
+
+
 def send_feishu(queue_state: list[QueueItem]) -> dict[str, Any]:
     """Send Feishu notification for each completed task."""
     queue = load_queue()
