@@ -318,6 +318,7 @@ def upload_video(video_path: str | None, state: dict) -> dict[str, Any]:
     source_path = Path(video_path)
     original_filename = source_path.name
     dest_path = session_dir / f"source{source_path.suffix}"
+    log.info("upload_video [1/6]: copying source video (%.1f MB)", source_path.stat().st_size / 1e6)
     shutil.copy2(source_path, dest_path)
     state["source_video_path"] = dest_path
     state["original_filename"] = original_filename
@@ -325,9 +326,11 @@ def upload_video(video_path: str | None, state: dict) -> dict[str, Any]:
     state["video_format"] = source_path.suffix.lstrip(".")
     state["video_duration"] = num_frames / fps if fps else 0.0
 
+    log.info("upload_video [2/6]: loading first frame")
     frame = load_frame(frames_dir, 0)
     state["video_height"], state["video_width"] = frame.shape[:2]
 
+    log.info("upload_video [3/6]: writing meta.json")
     meta = {
         "session_id": session_id,
         "original_filename": original_filename,
@@ -342,9 +345,12 @@ def upload_video(video_path: str | None, state: dict) -> dict[str, Any]:
     (session_dir / "meta.json").write_text(
         json.dumps(meta, ensure_ascii=False, indent=2),
     )
+    log.info("upload_video [4/6]: saving session state")
     save_session_state(state)
+    log.info("upload_video [5/6]: preload frames")
     preload_all_frames(frames_dir, num_frames)
 
+    log.info("upload_video [6/6]: rendering first frame")
     first_frame = render_frame(state)
     out = {
         "session_state": state,
