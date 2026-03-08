@@ -89,3 +89,6 @@ sdks/**/guides/
 sdks/**/client/
 models/
 workspace/
+
+# Private Claude Code project skills (deployment notes, local commands)
+.claude/commands/
