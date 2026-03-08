@@ -25,7 +25,7 @@ from config import (
     WORKSPACE_DIR,
     get_device,
 )
-from matting.session_store import empty_state, list_sessions
+from matting.session_store import copy_session, empty_state, list_sessions
 from task_queue.models import load_queue
 from matting.logic import (
     keyframe_display,
@@ -240,6 +240,57 @@ def matting_page(client):
                 ui.upload(on_upload=on_uploaded, max_file_size=500_000_000).props("accept='video/*'").classes("w-full")
                 ui.label("支持 mp4/mov/avi 等常见格式，上传后自动提取帧。").classes("text-xs text-gray-400")
 
+                # ---- 从链接下载 ----
+                with ui.row().classes("w-full items-center gap-2 mt-2"):
+                    url_input = ui.input(placeholder="输入视频链接（TikTok / 直链 等）").classes("flex-1")
+
+                    async def on_download_url():
+                        url = url_input.value.strip()
+                        if not url:
+                            ui.notify("请输入视频链接", type="warning")
+                            return
+                        loading_note = ui.notification("正在下载视频…", type="ongoing", timeout=None, spinner=True)
+                        try:
+                            from utils.video_downloader import download_video
+                            upload_dir = WORKSPACE_DIR / "uploads"
+                            dest = await run.io_bound(download_video, url, upload_dir)
+                            out = await run.io_bound(upload_video, str(dest), page_state["session"])
+                        except Exception as ex:
+                            loading_note.dismiss()
+                            log.exception("Download from URL failed")
+                            ui.notify(f"下载失败: {ex}", type="negative", timeout=0)
+                            return
+                        loading_note.dismiss()
+                        url_input.value = ""
+                        page_state["session"] = out["session_state"]
+                        if page_state["session"].get("session_id"):
+                            save_session_id(page_state["session"]["session_id"])
+                        if out.get("frame_image") is not None:
+                            refs["frame_image"].set_source(write_frame_preview(out["frame_image"], user_id))
+                        if out.get("frame_label"):
+                            refs["frame_label"].set_text(out["frame_label"])
+                        if out.get("keyframe_info"):
+                            refs["keyframe_info"].set_text(out["keyframe_info"])
+                        if out.get("keyframe_gallery") is not None:
+                            refresh_gallery(refs["keyframe_gallery_container"], out["keyframe_gallery"], user_id, jump_to_frame)
+                        if out.get("slider_visible") is not None:
+                            refs["frame_slider"].set_visibility(out["slider_visible"])
+                            refs["frame_slider"].props["max"] = out.get("slider_max", 0)
+                            refs["frame_slider"].value = out.get("slider_value", 0)
+                            refs["frame_input"].set_visibility(out["slider_visible"])
+                            refs["frame_input"].max = out.get("slider_max", 0)
+                            refs["frame_input"].value = out.get("slider_value", 0)
+                        if out.get("session_choices") is not None:
+                            refs["session_dropdown"].options = {v: l for l, v in out["session_choices"]}
+                            refs["session_dropdown"].value = out.get("session_value")
+                        st = out["session_state"]
+                        if st.get("session_id") and st.get("source_video_path"):
+                            src = Path(st["source_video_path"])
+                            refs["video_display"].set_source(f"/sessions/{st['session_id']}/{src.name}")
+                        apply_notify(out)
+
+                    ui.button("从链接下载", on_click=on_download_url).props("color=primary")
+
             with ui.column().classes("w-64"):
                 sessions = list_sessions()
                 session_dropdown = ui.select(
@@ -266,6 +317,26 @@ def matting_page(client):
                         finally:
                             loading_note.dismiss()
                     ui.button("恢复", on_click=on_restore).props("color=primary")
+                    async def on_copy():
+                        sid = refs["session_dropdown"].value
+                        if not sid:
+                            ui.notify("请先选择要复制的 Session", type="warning")
+                            return
+                        loading_note = ui.notification("正在复制 Session…", type="ongoing", timeout=None, spinner=True)
+                        try:
+                            new_id, new_label = await run.io_bound(copy_session, sid)
+                        except Exception as ex:
+                            log.exception("Copy session failed")
+                            ui.notify(f"复制失败: {ex}", type="negative", timeout=0)
+                            return
+                        finally:
+                            loading_note.dismiss()
+                        # 刷新下拉列表并选中新 session
+                        out = refresh_sessions()
+                        refs["session_dropdown"].options = {v: l for l, v in out["session_choices"]}
+                        refs["session_dropdown"].value = new_id
+                        ui.notify(f"已复制为 {new_id}", type="positive")
+                    ui.button("复制", on_click=on_copy)
                 ui.label("选择历史 Session 可恢复之前的标注、传播、抠像结果。").classes("text-xs text-gray-400")
 
     ui.separator()

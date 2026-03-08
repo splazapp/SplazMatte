@@ -8,8 +8,11 @@ from __future__ import annotations
 import colorsys
 import logging
 import random
+import re
 import threading
+import unicodedata
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
@@ -30,6 +33,19 @@ from utils.mask_utils import draw_points, fit_to_box, overlay_mask
 log = logging.getLogger(__name__)
 
 ProgressCallback = Callable[[float, str], None] | None
+
+
+def _make_tracking_session_id(video_path: str) -> str:
+    """Generate a human-readable tracking session ID."""
+    date_prefix = datetime.now().strftime("%Y%m%d_%H%M%S")
+    stem = Path(video_path).stem
+    stem = unicodedata.normalize("NFKC", stem)
+    stem = re.sub(r"[\s\-]+", "_", stem)
+    stem = re.sub(r"[^\w]", "", stem, flags=re.UNICODE)
+    stem = re.sub(r"_+", "_", stem).strip("_")
+    if not stem:
+        stem = "video"
+    return f"{date_prefix}_追踪-{stem}"
 
 
 def empty_tracking_state() -> dict[str, Any]:
@@ -131,7 +147,7 @@ def preprocess_video(video_path: str, state: dict) -> dict[str, Any]:
     """
     log.info("Loading video: %s", video_path)
 
-    sid = uuid.uuid4().hex[:12]
+    sid = _make_tracking_session_id(video_path)
     session_dir = TRACKING_SESSIONS_DIR / sid
     frames_dir = session_dir / "frames"
 

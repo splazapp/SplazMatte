@@ -321,12 +321,60 @@ def list_sessions() -> list[tuple[str, str]]:
                 filename = meta.get("original_filename", "")
             except (json.JSONDecodeError, OSError):
                 pass
-        label = f"{session_id} ({filename})" if filename else session_id
+        label = session_id
         mtime = state_file.stat().st_mtime
         items.append((mtime, label, session_id))
 
     items.sort(key=lambda x: x[0], reverse=True)
     return [(label, sid) for _, label, sid in items]
+
+
+def copy_session(session_id: str) -> tuple[str, str]:
+    """复制一个 session 目录，生成带递增 -NNN 后缀的新 session。
+
+    后缀始终基于 base 名计算（先去掉已有的 -NNN），
+    避免嵌套后缀（如 A-002-002）。示例：
+      A → A-002 → A-003（而非 A-002-002）
+      选中 A-002 复制 → A-004（与 A-003 共用同一 base=A 的计数）
+
+    Args:
+        session_id: 源 session ID（目录名）。
+
+    Returns:
+        (new_session_id, new_label)，label 格式与 list_sessions() 一致。
+
+    Raises:
+        FileNotFoundError: 源 session 不存在时。
+        FileExistsError: 目标 session 已存在时。
+    """
+    import re
+    import shutil
+
+    src_dir = MATTING_SESSIONS_DIR / session_id
+    if not src_dir.exists():
+        raise FileNotFoundError(f"Session not found: {session_id}")
+
+    # 去掉已有的 -NNN 后缀，得到 base 名
+    base = re.sub(r"-\d{3}$", "", session_id)
+
+    # 扫描所有 session，找出该 base 下已有的最大 -NNN 编号
+    pattern = re.compile(rf"^{re.escape(base)}-(\d{{3}})$")
+    max_n = 1  # 至少产生 -002
+    for d in MATTING_SESSIONS_DIR.iterdir():
+        if not d.is_dir():
+            continue
+        m = pattern.match(d.name)
+        if m:
+            max_n = max(max_n, int(m.group(1)))
+
+    new_id = f"{base}-{max_n + 1:03d}"
+    dst_dir = MATTING_SESSIONS_DIR / new_id
+    if dst_dir.exists():
+        raise FileExistsError(f"Target session already exists: {new_id}")
+
+    shutil.copytree(src_dir, dst_dir)
+    log.info("Copied session %s -> %s", session_id, new_id)
+    return new_id, new_id
 
 
 def read_session_status(session_id: str) -> dict:

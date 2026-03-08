@@ -103,7 +103,6 @@ def queue_table_rows(queue: list[QueueItem]) -> list[list]:
         if info is None:
             rows.append([i, type_label, item["sid"], 0, 0, "-", "丢失"])
             continue
-        video_name = info.get("original_filename", item["sid"])
         num_frames = info.get("num_frames", 0)
         kf_indices = info.get("keyframe_indices", [])
         status = info.get("task_status", "pending")
@@ -114,7 +113,7 @@ def queue_table_rows(queue: list[QueueItem]) -> list[list]:
         else:
             engine = info.get("matting_engine", DEFAULT_MATTING_ENGINE)
             mode = "MA" if engine == "MatAnyone" else "VM"
-        rows.append([i, type_label, video_name, num_frames, len(kf_indices), mode, status])
+        rows.append([i, type_label, item["sid"], num_frames, len(kf_indices), mode, status])
     return rows
 
 
@@ -151,6 +150,11 @@ def _maybe_add_tracking_task(session_state: dict, queue: list) -> str:
         return ""
 
     # 预处理视频，创建追踪 session
+    # session_id 由抠像 sid 派生：将 _抠像- 替换为 _追踪-
+    import re as _re
+    matting_sid = session_state.get("session_id", "")
+    desired_tracking_sid = _re.sub(r"_抠像-", "_追踪-", matting_sid) if "_抠像-" in matting_sid else ""
+
     tracking_state = empty_tracking_state()
     result = preprocess_video(str(video_path), tracking_state)
     if result.get("notify", ("", ""))[0] == "error":
@@ -164,6 +168,11 @@ def _maybe_add_tracking_task(session_state: dict, queue: list) -> str:
         session_state.get("original_filename")
         or Path(str(video_path)).name
     )
+
+    # 将自动生成的随机 sid 重命名为派生自抠像 sid 的确定性 sid
+    if desired_tracking_sid and desired_tracking_sid != tracking_state["session_id"]:
+        from tracking.session_store import rename_tracking_session
+        tracking_state = rename_tracking_session(tracking_state, desired_tracking_sid) or tracking_state
 
     # 坐标转换：原始分辨率 → 追踪预览分辨率
     orig_h = session_state.get("video_height", 0)
@@ -590,7 +599,7 @@ def _pack_results_zip(queue: list[QueueItem]) -> Path | None:
                 # Result video + AE export
                 for pattern in ("tracking_*.mp4", "ae_export_*.txt"):
                     for f in results_dir.glob(pattern):
-                        zf.write(f, f"{video_name}_tracking/{f.name}")
+                        zf.write(f, f"{sid}_tracking/{f.name}")
                         packed += 1
             else:
                 # Pack matting results
@@ -598,7 +607,7 @@ def _pack_results_zip(queue: list[QueueItem]) -> Path | None:
                 for filename in ("alpha.mp4", "foreground.mp4"):
                     src = session_dir / filename
                     if src.exists():
-                        zf.write(src, f"{video_name}/{filename}")
+                        zf.write(src, f"{sid}/{filename}")
                         packed += 1
 
                 source_video_path = info.get("source_video_path")
@@ -607,7 +616,7 @@ def _pack_results_zip(queue: list[QueueItem]) -> Path | None:
                     if source_video.exists() and source_video.is_file():
                         original_name = info.get("original_filename") or source_video.name
                         original_suffix = Path(original_name).suffix or source_video.suffix or ".mp4"
-                        zf.write(source_video, f"{video_name}/original{original_suffix}")
+                        zf.write(source_video, f"{sid}/original{original_suffix}")
                         packed += 1
     if packed == 0:
         zip_path.unlink(missing_ok=True)

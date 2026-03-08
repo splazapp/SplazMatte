@@ -40,6 +40,9 @@ oss2>=2.18.0
 # HTTP (Feishu webhook)
 requests>=2.31.0
 
+# Video download (social media + direct links)
+yt-dlp>=2024.1.0
+
 # Visualization
 matplotlib>=3.5.0
 

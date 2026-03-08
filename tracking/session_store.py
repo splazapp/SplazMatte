@@ -240,6 +240,117 @@ def list_tracking_sessions() -> list[tuple[str, str]]:
     return [(label, sid) for _, label, sid in items]
 
 
+def rename_tracking_session(state: dict, new_sid: str) -> dict | None:
+    """Rename a tracking session directory to new_sid, updating state in-place.
+
+    Args:
+        state: Tracking state dict with session_id pointing to an existing dir.
+        new_sid: Desired new session ID.
+
+    Returns:
+        Updated state dict with session_id = new_sid, or None on failure.
+    """
+    import shutil
+
+    old_sid = state.get("session_id", "")
+    if not old_sid or old_sid == new_sid:
+        return state
+
+    src_dir = TRACKING_SESSIONS_DIR / old_sid
+    dst_dir = TRACKING_SESSIONS_DIR / new_sid
+
+    if not src_dir.exists():
+        return None
+    if dst_dir.exists():
+        log.warning("rename_tracking_session: target %s already exists, skipping rename", new_sid)
+        return state
+
+    shutil.move(str(src_dir), str(dst_dir))
+
+    # Update state dict
+    state = dict(state)
+    state["session_id"] = new_sid
+    frames_dir = state.get("frames_dir")
+    if frames_dir is not None:
+        frames_dir_path = Path(str(frames_dir))
+        try:
+            rel = frames_dir_path.relative_to(src_dir)
+            state["frames_dir"] = dst_dir / rel
+        except ValueError:
+            pass
+
+    # Update meta.json with new session_id
+    meta_path = dst_dir / "meta.json"
+    if meta_path.exists():
+        try:
+            meta = json.loads(meta_path.read_text())
+            meta["session_id"] = new_sid
+            fd = meta.get("frames_dir", "")
+            if fd and old_sid in fd:
+                meta["frames_dir"] = fd.replace(str(src_dir), str(dst_dir))
+            meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2))
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    log.info("Renamed tracking session %s -> %s", old_sid, new_sid)
+    return state
+
+
+def copy_tracking_session(session_id: str) -> tuple[str, str]:
+    """复制一个追踪 session 目录，生成带递增 -NNN 后缀的新 session。
+
+    后缀始终基于 base 名计算（先去掉已有的 -NNN），
+    避免嵌套后缀。示例：
+      A → A-002 → A-003（而非 A-002-002）
+
+    Args:
+        session_id: 源 session ID。
+
+    Returns:
+        (new_session_id, new_label)
+
+    Raises:
+        FileNotFoundError: 源 session 不存在时。
+        FileExistsError: 目标 session 已存在时。
+    """
+    import re
+    import shutil
+
+    src_dir = TRACKING_SESSIONS_DIR / session_id
+    if not src_dir.exists():
+        raise FileNotFoundError(f"Tracking session not found: {session_id}")
+
+    base = re.sub(r"-\d{3}$", "", session_id)
+    pattern = re.compile(rf"^{re.escape(base)}-(\d{{3}})$")
+    max_n = 1
+    for d in TRACKING_SESSIONS_DIR.iterdir():
+        if not d.is_dir():
+            continue
+        m = pattern.match(d.name)
+        if m:
+            max_n = max(max_n, int(m.group(1)))
+
+    new_id = f"{base}-{max_n + 1:03d}"
+    dst_dir = TRACKING_SESSIONS_DIR / new_id
+    if dst_dir.exists():
+        raise FileExistsError(f"Target tracking session already exists: {new_id}")
+
+    shutil.copytree(src_dir, dst_dir)
+
+    # Update meta.json session_id in the copy
+    meta_path = dst_dir / "meta.json"
+    if meta_path.exists():
+        try:
+            meta = json.loads(meta_path.read_text())
+            meta["session_id"] = new_id
+            meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2))
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    log.info("Copied tracking session %s -> %s", session_id, new_id)
+    return new_id, new_id
+
+
 def read_tracking_session_info(sid: str) -> dict | None:
     """Read lightweight session info without loading numpy data.
 

@@ -37,6 +37,7 @@ from task_queue.logic import (
 )
 from task_queue.models import load_queue
 from tracking.export import export_ae_keyframe_data as ct_ae_export
+from tracking.session_store import copy_tracking_session
 from tracking.logic import (
     empty_tracking_state,
     preprocess_video as ct_preprocess_video,
@@ -272,6 +273,25 @@ def tracking_page(client):
                         finally:
                             loading_note.dismiss()
                     ui.button("恢复", on_click=on_tracking_restore).props("color=primary")
+                    async def on_tracking_copy():
+                        sid = refs["tracking_session_dropdown"].value
+                        if not sid:
+                            ui.notify("请先选择要复制的 Session", type="warning")
+                            return
+                        loading_note = ui.notification("正在复制 Session…", type="ongoing", timeout=None, spinner=True)
+                        try:
+                            new_id, new_label = await run.io_bound(copy_tracking_session, sid)
+                        except Exception as ex:
+                            log.exception("Copy tracking session failed")
+                            ui.notify(f"复制失败: {ex}", type="negative", timeout=0)
+                            return
+                        finally:
+                            loading_note.dismiss()
+                        out = ct_refresh_sessions()
+                        refs["tracking_session_dropdown"].options = {v: l for l, v in out["session_choices"]}
+                        refs["tracking_session_dropdown"].value = new_id
+                        ui.notify(f"已复制为 {new_id}", type="positive")
+                    ui.button("复制", on_click=on_tracking_copy)
                 ui.label("选择历史 Session 可恢复之前的追踪点、追踪结果。").classes("text-xs text-gray-400")
 
     ui.separator()

@@ -85,7 +85,7 @@ def build_queue_panel(
         columns = [
             {"name": "idx", "label": "序号", "field": "idx", "align": "center"},
             {"name": "type", "label": "类型", "field": "type", "align": "center"},
-            {"name": "video", "label": "视频名", "field": "video"},
+            {"name": "video", "label": "Session", "field": "video"},
             {"name": "frames", "label": "帧数", "field": "frames", "align": "center"},
             {"name": "kf", "label": "关键帧", "field": "kf", "align": "center"},
             {"name": "mode", "label": "模式", "field": "mode", "align": "center"},

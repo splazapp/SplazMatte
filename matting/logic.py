@@ -108,7 +108,7 @@ def _make_session_id(video_filename: str) -> str:
     stem = re.sub(r"_+", "_", stem).strip("_")
     if not stem:
         stem = "video"
-    return f"{date_prefix}_{stem}"
+    return f"{date_prefix}_抠像-{stem}"
 
 
 # ---------------------------------------------------------------------------
