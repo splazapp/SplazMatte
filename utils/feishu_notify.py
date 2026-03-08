@@ -264,6 +264,49 @@ def send_feishu_tracking_success(
     _post_card(card)
 
 
+def send_feishu_queue_complete(
+    done_count: int,
+    error_count: int,
+    timings: list[str],
+    zip_cdn_url: str | None = None,
+) -> None:
+    """Send a queue completion summary notification to Feishu.
+
+    Args:
+        done_count: Number of successfully completed tasks.
+        error_count: Number of failed tasks.
+        timings: List of timing strings per task.
+        zip_cdn_url: Optional CDN URL for the results zip download.
+    """
+    status_icon = "✅" if error_count == 0 else "⚠️"
+    title = f"SplazMatte 队列执行完毕 {status_icon}"
+    template = "green" if error_count == 0 else "orange"
+
+    summary = f"**成功**: {done_count} 个任务"
+    if error_count:
+        summary += f"  |  **失败**: {error_count} 个任务"
+
+    timing_lines = "\n".join(f"- {t}" for t in timings) if timings else "（无耗时记录）"
+    content_md = (
+        f"{summary}\n"
+        f"**设备**: {_device_info()}\n\n"
+        f"**各任务耗时**\n{timing_lines}"
+    )
+    if zip_cdn_url:
+        content_md += f"\n\n**结果打包下载**: [results.zip]({zip_cdn_url})"
+
+    card = {
+        "header": {
+            "title": {"tag": "plain_text", "content": title},
+            "template": template,
+        },
+        "elements": [
+            {"tag": "markdown", "content": content_md},
+        ],
+    }
+    _post_card(card)
+
+
 def send_feishu_failure(session_id: str, error: Exception) -> None:
     """Send a failure notification card to Feishu.
 

@@ -788,6 +788,23 @@ def run_execute_queue(progress_callback: ProgressCallback = None) -> dict[str, A
 
     done_count, error_count, timings = execute_queue(progress_cb)
 
+    zip_cdn_url: str | None = None
+    try:
+        from utils.storage import upload_session
+        queue_for_pack = load_queue()
+        zip_path = _pack_results_zip(queue_for_pack)
+        if zip_path is not None:
+            urls = upload_session("queue_results", [zip_path])
+            zip_cdn_url = urls.get(zip_path.name)
+    except Exception:
+        log.exception("Failed to pack/upload results zip")
+
+    try:
+        from utils.feishu_notify import send_feishu_queue_complete
+        send_feishu_queue_complete(done_count, error_count, timings, zip_cdn_url=zip_cdn_url)
+    except Exception:
+        log.exception("Failed to send queue-complete Feishu notification")
+
     summary_parts = [f"队列执行完毕: {done_count} 成功"]
     if error_count:
         summary_parts[0] += f", {error_count} 失败"

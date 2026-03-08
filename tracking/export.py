@@ -7,6 +7,7 @@ import uuid
 from typing import Any
 
 import numpy as np
+from scipy.signal import savgol_filter
 
 from config import COTRACKER_INPUT_RESO, WORKSPACE_DIR
 
@@ -161,6 +162,65 @@ def compute_trajectory_summary(
     return summary
 
 
+def smooth_trajectory(
+    summary: np.ndarray,
+    window_length: int = 15,
+    polyorder: int = 3,
+) -> np.ndarray:
+    """对整体轨迹做时域平滑（Savitzky-Golay）。
+
+    步骤：
+    1. 将 NaN 插值填充（保持有效段连续）
+    2. 剔除帧间跳点（distance > mean + 2*std），线性插值替换
+    3. Savitzky-Golay 平滑 x、y 分量
+
+    Args:
+        summary: (T, 2) 原始轨迹，NaN 表示该帧无效。
+        window_length: SG 窗口大小（奇数），默认 15。
+        polyorder: SG 多项式阶数，默认 3。
+
+    Returns:
+        (T, 2) 平滑后轨迹，原始 NaN 位置保持 NaN。
+    """
+    T = len(summary)
+    nan_mask = np.isnan(summary[:, 0])
+    valid_count = int((~nan_mask).sum())
+
+    if valid_count < polyorder + 2:
+        return summary
+
+    result = summary.copy()
+
+    # Step 1: 线性插值填充 NaN，使序列连续
+    indices = np.arange(T)
+    for dim in range(2):
+        valid = ~nan_mask
+        result[:, dim] = np.interp(indices, indices[valid], summary[valid, dim])
+
+    # Step 2: 剔除帧间跳点（欧氏距离 > mean + 2*std）
+    diffs = np.linalg.norm(np.diff(result, axis=0), axis=1)  # (T-1,)
+    threshold = diffs.mean() + 2.0 * diffs.std()
+    jump_frames = np.where(diffs > threshold)[0] + 1  # 跳点索引（目标帧）
+    if len(jump_frames) > 0:
+        jump_mask = np.zeros(T, dtype=bool)
+        jump_mask[jump_frames] = True
+        keep = ~jump_mask
+        for dim in range(2):
+            result[:, dim] = np.interp(indices, indices[keep], result[keep, dim])
+
+    # Step 3: Savitzky-Golay 平滑
+    wl = min(window_length, valid_count)
+    if wl % 2 == 0:
+        wl -= 1
+    wl = max(wl, polyorder + 2 if (polyorder + 2) % 2 == 1 else polyorder + 3)
+    for dim in range(2):
+        result[:, dim] = savgol_filter(result[:, dim], window_length=wl, polyorder=polyorder)
+
+    # 还原原始 NaN 位置
+    result[nan_mask] = np.nan
+    return result
+
+
 def _format_jsx_script(
     summary: np.ndarray,
     fps: float,
@@ -235,6 +295,7 @@ def export_trajectory_summary(state: dict) -> dict[str, Any]:
     sid = state.get("session_id") or uuid.uuid4().hex
 
     summary = compute_trajectory_summary(raw_tracks, raw_vis, orig_w, orig_h, input_w, input_h)
+    summary = smooth_trajectory(summary)
 
     valid_mask = ~np.isnan(summary[:, 0])
     num_valid = int(valid_mask.sum())
