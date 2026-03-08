@@ -337,7 +337,11 @@ def matting_page(client):
                         refs["session_dropdown"].value = new_id
                         ui.notify(f"已复制为 {new_id}", type="positive")
                     ui.button("复制", on_click=on_copy)
-                ui.label("选择历史 Session 可恢复之前的标注、传播、抠像结果。").classes("text-xs text-gray-400")
+                session_hint = ui.label("选择历史 Session 可恢复之前的标注、传播、抠像结果。").classes("text-xs text-gray-400")
+                session_id_hint = ui.label("").classes("text-xs text-gray-500 font-mono")
+                def on_session_select(e):
+                    session_id_hint.set_text(e.value or "")
+                refs["session_dropdown"].on_value_change(on_session_select)
 
     ui.separator()
 

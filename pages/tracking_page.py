@@ -293,6 +293,10 @@ def tracking_page(client):
                         ui.notify(f"已复制为 {new_id}", type="positive")
                     ui.button("复制", on_click=on_tracking_copy)
                 ui.label("选择历史 Session 可恢复之前的追踪点、追踪结果。").classes("text-xs text-gray-400")
+                tracking_session_id_hint = ui.label("").classes("text-xs text-gray-500 font-mono")
+                def on_tracking_session_select(e):
+                    tracking_session_id_hint.set_text(e.value or "")
+                refs["tracking_session_dropdown"].on_value_change(on_tracking_session_select)
 
     ui.separator()
 
